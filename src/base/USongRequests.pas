@@ -159,6 +159,7 @@ type
       fThumbDir:      IPath;
       fDirty:         boolean;
       fVersion:       integer; // grows with every change of the state
+      fGameNick:      UTF8String; // shown for requests added in the game
       fLastSave:      TDateTime;
 
       // catalog snapshot
@@ -208,6 +209,7 @@ type
       procedure MarkDirty;
       procedure AddActivity(const Kind, Who, Detail: UTF8String);
       procedure RemoveVotesOf(const UserId: UTF8String);
+      function VoterName(const Id: UTF8String): UTF8String;
 
       procedure RebuildCatalog;
       procedure LoadStats;
@@ -265,6 +267,9 @@ type
       function IsRequested(const Artist, Title: UTF8String): boolean;
       {* Removes a song from the queue from within the game (song menu). *}
       function RemoveRequest(const Artist, Title: UTF8String): boolean;
+      {* Adds a song to the queue from within the game (song menu). It is
+       * not bound to the per guest limits. *}
+      function AddRequestFromGame(const Artist, Title: UTF8String): boolean;
       function QueueSnapshot: TSRQueueEntries;
       procedure SetNowPlaying(const Artist, Title, Players: UTF8String; Position, Duration: double);
       procedure ClearNowPlaying;
@@ -275,6 +280,7 @@ type
       property Config: TSongRequestsConfig read fConfig;
       property PendingCount: integer read GetPendingCount;
       property Version: integer read fVersion;
+      property GameNick: UTF8String read fGameNick write fGameNick;
   end;
 
 var
@@ -320,6 +326,8 @@ const
   MAX_FAILED_LOGINS  = 5;
   LOGIN_LOCK_SEC     = 300;
   INI_SECTION        = 'SongRequests';
+  // voter id of requests added in the game; real ids are 16+ characters
+  GAME_VOTER         = 'game';
 
 function SongRequestKey(const Artist, Title: UTF8String): UTF8String;
 begin
@@ -988,6 +996,24 @@ begin
   MarkDirty;
 end;
 
+function TSongRequests.VoterName(const Id: UTF8String): UTF8String;
+var
+  User: TSRUser;
+begin
+  if Id = GAME_VOTER then
+  begin
+    Result := fGameNick;
+    if Result = '' then
+      Result := 'UltraStar';
+    Exit;
+  end;
+  User := FindUser(Id);
+  if User <> nil then
+    Result := User.Nick
+  else
+    Result := '';
+end;
+
 {* Removes all votes of a user and the requests left without votes; the
  * caller holds the lock. *}
 procedure TSongRequests.RemoveVotesOf(const UserId: UTF8String);
@@ -1281,11 +1307,46 @@ begin
   end;
 end;
 
+function TSongRequests.AddRequestFromGame(const Artist, Title: UTF8String): boolean;
+var
+  Key:     UTF8String;
+  Idx:     integer;
+  Request: TSRRequest;
+begin
+  Key := SongRequestKey(Artist, Title);
+  fLock.Enter;
+  try
+    Result := FindRequest(Key) = nil;
+    if not Result then
+      Exit;
+    Request := TSRRequest.Create;
+    Request.Key := Key;
+    Idx := FindSongIndex(Key);
+    if Idx >= 0 then
+    begin
+      Request.Artist := fSongs[Idx].Artist;
+      Request.Title := fSongs[Idx].Title;
+    end
+    else
+    begin
+      Request.Artist := Artist;
+      Request.Title := Title;
+    end;
+    Request.FirstAt := NowUTC;
+    Request.Voters.Add(GAME_VOTER);
+    fQueue.Add(Request);
+    fRequestCounts.Values[Key] := IntToStr(RequestCount(Key) + 1);
+    AddActivity('game_add', '', Request.Artist + ' - ' + Request.Title);
+    SortQueue;
+  finally
+    fLock.Leave;
+  end;
+end;
+
 function TSongRequests.QueueSnapshot: TSRQueueEntries;
 var
   I, J:    integer;
   Request: TSRRequest;
-  User:    TSRUser;
 begin
   fLock.Enter;
   try
@@ -1300,12 +1361,11 @@ begin
       Result[I].By := '';
       for J := 0 to Request.Voters.Count - 1 do
       begin
-        User := FindUser(Request.Voters[J]);
-        if User = nil then
+        if VoterName(Request.Voters[J]) = '' then
           Continue;
         if Result[I].By <> '' then
           Result[I].By := Result[I].By + ', ';
-        Result[I].By := Result[I].By + User.Nick;
+        Result[I].By := Result[I].By + VoterName(Request.Voters[J]);
       end;
     end;
   finally
@@ -1394,7 +1454,6 @@ function TSongRequests.RequestToJSON(Request: TSRRequest; const UserId: UTF8Stri
 var
   Idx, I: integer;
   Names:  TJSONArray;
-  User:   TSRUser;
 begin
   Result := TJSONObject.Create;
   Idx := FindSongIndex(Request.Key);
@@ -1411,9 +1470,8 @@ begin
   Names := TJSONArray.Create;
   for I := 0 to Request.Voters.Count - 1 do
   begin
-    User := FindUser(Request.Voters[I]);
-    if User <> nil then
-      Names.Add(User.Nick);
+    if VoterName(Request.Voters[I]) <> '' then
+      Names.Add(VoterName(Request.Voters[I]));
   end;
   Result.Add('by', Names);
   if Admin then
