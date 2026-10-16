@@ -374,12 +374,14 @@ begin
   SetFontStyle(ftBold);
   SetFontItalic(false);
   SetFontSize(20);
-  Text := Format('%s: %d  [N]', [Language.Translate('SONG_REQUESTS_BADGE'), Count]);
+  Text := Format('%s: %d  -  %s', [Language.Translate('SONG_REQUESTS_BADGE'), Count,
+    Language.Translate('SONG_REQUESTS_BADGE_HINT')]);
 
   W := TextWidth(Text) + 24;
   H := 30;
+  // bottom right, the top of the screen holds the theme's logo
   X := RenderW - W - 16;
-  Y := 12;
+  Y := RenderH - H - 12;
 
   Pulse := 0;
   if (PulseStart <> 0) and (Ticks - PulseStart < PULSE_MS) then
