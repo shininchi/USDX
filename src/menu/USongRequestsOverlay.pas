@@ -74,6 +74,7 @@ const
   FADE_MS   = 250;
   PULSE_MS  = 1500;
   NOTICE_MS = 4000;
+  BOTTOM_MARGIN = 44; // keeps the help bar at the bottom of the screen visible
 
 var
   Visible:   boolean;
@@ -390,9 +391,9 @@ begin
 
   W := TextWidth(Text) + 24;
   H := 30;
-  // bottom right, the top of the screen holds the theme's logo
+  // bottom right, above the theme's help bar; the top holds the logo
   X := RenderW - W - 16;
-  Y := RenderH - H - 12;
+  Y := RenderH - H - BOTTOM_MARGIN;
 
   Pulse := 0;
   if (PulseStart <> 0) and (Ticks - PulseStart < PULSE_MS) then
@@ -443,7 +444,7 @@ begin
   W := Min(TextWidth(NoticeText) + 32, RenderW - 40);
   H := 32;
   X := (RenderW - W) / 2;
-  Y := RenderH - H - 54; // above the row of the badge
+  Y := RenderH - H - BOTTOM_MARGIN - 42; // above the row of the badge
 
   DepthTest := Renderer.DepthTest;
   Renderer.DepthTest := false;
