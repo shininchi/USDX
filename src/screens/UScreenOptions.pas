@@ -294,8 +294,22 @@ begin
             FadeTo(@ScreenMain);
           end;
         end;
-      SDLK_DOWN:    InteractNextRow;
-      SDLK_UP:      InteractPrevRow;
+      SDLK_DOWN:
+        begin
+          // the last row is not full, go down to the exit button from there
+          if (Interaction + 4 > integer(ButtonExitIID)) and (Interaction <> integer(ButtonExitIID)) then
+            Interaction := ButtonExitIID
+          else
+            InteractNextRow;
+        end;
+      SDLK_UP:
+        begin
+          // the exit button sits below the right-most column
+          if Interaction = integer(ButtonExitIID) then
+            Interaction := ButtonSongRequestsIID
+          else
+            InteractPrevRow;
+        end;
       SDLK_RIGHT:   InteractNext;
       SDLK_LEFT:    InteractPrev;
     end;
