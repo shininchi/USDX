@@ -23,5 +23,11 @@
 example.duckdns.org {
 	tls /opt/homebrew/etc/usdx-tls/fullchain.pem /opt/homebrew/etc/usdx-tls/key.pem
 	encode gzip
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy 127.0.0.1:8080 {
+		# the game's server closes idle connections; reusing one makes the
+		# request fail, so every request gets a new local connection
+		transport http {
+			keepalive off
+		}
+	}
 }
