@@ -292,18 +292,22 @@ begin
   ShowNotice(Text);
 end;
 
+{* Index of the song in CatSongs; of a solo and a duet version of the same
+ * song the duet version is preferred, like in the web client. *}
 function FindCatSong(const Key: UTF8String): integer;
 var
   I: integer;
 begin
+  Result := -1;
   for I := 0 to High(CatSongs.Song) do
     if (not CatSongs.Song[I].Main) and
        (SongRequestKey(CatSongs.Song[I].Artist, CatSongs.Song[I].Title) = Key) then
     begin
-      Result := I;
-      Exit;
+      if (Result < 0) or (CatSongs.Song[I].isDuet and not CatSongs.Song[Result].isDuet) then
+        Result := I;
+      if CatSongs.Song[Result].isDuet then
+        Exit;
     end;
-  Result := -1;
 end;
 
 procedure SongRequestsJump(RandomPick: boolean);

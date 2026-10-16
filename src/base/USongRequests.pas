@@ -1043,6 +1043,7 @@ end;
 
 procedure TSongRequests.RebuildCatalog;
 var
+  Existing: integer;
   I, N:     integer;
   Song:     TSong;
   CoverPath: IPath;
@@ -1095,7 +1096,12 @@ begin
     end;
     fSongs[I].Rap := Song.hasRap;
     fSongs[I].Search := Song.ArtistASCII + ' ' + Song.TitleASCII;
-    fKeyIndex.AddObject(fSongs[I].Key, TObject(PtrInt(I)));
+    // one entry per song; when it exists as solo and duet version, the
+    // duet version represents it
+    if not fKeyIndex.Find(fSongs[I].Key, Existing) then
+      fKeyIndex.AddObject(fSongs[I].Key, TObject(PtrInt(I)))
+    else if fSongs[I].Duet and not fSongs[PtrInt(fKeyIndex.Objects[Existing])].Duet then
+      fKeyIndex.Objects[Existing] := TObject(PtrInt(I));
   end;
   fCatalogCount := N;
   fStatsLoadedAt := 0;
