@@ -262,6 +262,9 @@ type
 
       // game API (main thread)
       procedure MarkSung(const Artist, Title: UTF8String);
+      function IsRequested(const Artist, Title: UTF8String): boolean;
+      {* Removes a song from the queue from within the game (song menu). *}
+      function RemoveRequest(const Artist, Title: UTF8String): boolean;
       function QueueSnapshot: TSRQueueEntries;
       procedure SetNowPlaying(const Artist, Title, Players: UTF8String; Position, Duration: double);
       procedure ClearNowPlaying;
@@ -1245,6 +1248,34 @@ begin
     end;
     fStatsLoadedAt := 0;
     MarkDirty;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.IsRequested(const Artist, Title: UTF8String): boolean;
+begin
+  fLock.Enter;
+  try
+    Result := FindRequest(SongRequestKey(Artist, Title)) <> nil;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.RemoveRequest(const Artist, Title: UTF8String): boolean;
+var
+  Request: TSRRequest;
+begin
+  fLock.Enter;
+  try
+    Request := FindRequest(SongRequestKey(Artist, Title));
+    Result := Request <> nil;
+    if Result then
+    begin
+      AddActivity('game_remove', '', Request.Artist + ' - ' + Request.Title);
+      fQueue.Remove(Request);
+    end;
   finally
     fLock.Leave;
   end;

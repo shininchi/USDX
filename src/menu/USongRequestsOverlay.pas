@@ -53,6 +53,9 @@ procedure SongRequestsHideQR;
  * random one. *}
 procedure SongRequestsJump(RandomPick: boolean);
 
+{* Shows a message at the bottom center of the song selection screen. *}
+procedure SongRequestsShowNotice(const Text: UTF8String);
+
 implementation
 
 uses
@@ -282,6 +285,11 @@ procedure ShowNotice(const Text: UTF8String);
 begin
   NoticeText := Text;
   NoticeStart := SDL_GetTicks;
+end;
+
+procedure SongRequestsShowNotice(const Text: UTF8String);
+begin
+  ShowNotice(Text);
 end;
 
 function FindCatSong(const Key: UTF8String): integer;

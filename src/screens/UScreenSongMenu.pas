@@ -106,6 +106,8 @@ uses
   UPlaylist,
   URenderer,
   USong,
+  USongRequests,
+  USongRequestsOverlay,
   USongs,
   UUnicodeUtils;
 
@@ -358,7 +360,11 @@ begin
 
         Button[0].Visible := true;
         Button[1].Visible := ((Length(PlaylistMedley.Song) > 0) or (CatSongs.Song[ScreenSong.Interaction].Medley.Source > msNone));
-        Button[2].Visible := false;
+        // only for songs in the song request queue
+        Button[2].Visible := (SongRequests <> nil) and
+          not CatSongs.Song[ScreenSong.Interaction].Main and
+          SongRequests.IsRequested(CatSongs.Song[ScreenSong.Interaction].Artist,
+                                   CatSongs.Song[ScreenSong.Interaction].Title);
         Button[3].Visible := true;
         Button[4].Visible := false;
 
@@ -368,6 +374,7 @@ begin
 
         Button[0].Text[0].Text := Language.Translate('SONG_MENU_SONG');
         Button[1].Text[0].Text := Language.Translate('SONG_MENU_MEDLEY');
+        Button[2].Text[0].Text := Language.Translate('SONG_MENU_REQUESTS_REMOVE');
         Button[3].Text[0].Text := Language.Translate('SONG_MENU_REFRESH_SCORES');
       end;
     SM_Song:
@@ -758,6 +765,7 @@ end;
 procedure TScreenSongMenu.HandleReturn;
 var
   I: integer;
+  Song: TSong;
   SDL_ModState:  Word;
 begin
   SDL_ModState := SDL_GetModState and (KMOD_LSHIFT + KMOD_RSHIFT
@@ -776,9 +784,13 @@ begin
               MenuShow(SM_Medley);
             end;
 
-          2: // button 3
+          2: // button 3: remove the song from the song request queue
             begin
-              //Dummy
+              Song := CatSongs.Song[ScreenSong.Interaction];
+              if (SongRequests <> nil) and SongRequests.RemoveRequest(Song.Artist, Song.Title) then
+                SongRequestsShowNotice(Language.Translate('SONG_REQUESTS_REMOVED') + ': ' +
+                  Song.Artist + ' - ' + Song.Title);
+              Visible := false;
             end;
 
           3: // selectslide 1
