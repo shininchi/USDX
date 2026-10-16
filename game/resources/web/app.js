@@ -214,17 +214,51 @@ function jumpToLetter(letter) {
   if (!node) return;
   const header = document.querySelector('header.top').offsetHeight;
   window.scrollTo(0, node.getBoundingClientRect().top + window.scrollY - header - 8);
+  $('azBubble').textContent = target;
+}
+
+// Magnifier while dragging over the index: letters near the finger grow and
+// move out to the left so the finger does not cover them, and the bubble
+// follows the finger.
+function magnifyIndex(y) {
+  const bar = $('azIndex');
+  for (const span of bar.children) {
+    const rect = span.getBoundingClientRect();
+    const distance = Math.abs(rect.top + rect.height / 2 - y);
+    const strength = Math.max(0, 1 - distance / 70);
+    span.style.transform = strength > 0
+      ? `translateX(${-strength * 34}px) scale(${1 + strength * 1.3})`
+      : '';
+    span.classList.toggle('near', strength > 0.75);
+  }
   const bubble = $('azBubble');
-  bubble.textContent = target;
+  const barRect = bar.getBoundingClientRect();
+  bubble.style.left = `${barRect.left - 165}px`; // clear of the magnified letters
+  bubble.style.top = `${Math.min(Math.max(y, barRect.top + 30), barRect.bottom - 30)}px`;
   bubble.classList.remove('hidden');
+}
+
+function resetIndexMagnifier() {
+  for (const span of $('azIndex').children) {
+    span.style.transform = '';
+    span.classList.remove('near');
+  }
 }
 
 function setupIndex() {
   const bar = $('azIndex');
   let hideTimer;
+  // the letter under the finger is found by height, as magnified letters
+  // move away from under it
   const pick = event => {
-    const node = document.elementFromPoint(event.clientX, event.clientY);
-    if (node && node.dataset && node.dataset.letter) jumpToLetter(node.dataset.letter);
+    const spans = [...bar.children];
+    const hit = spans.find(span => {
+      const rect = span.getBoundingClientRect();
+      const top = rect.top + rect.height / 2 - bar.clientHeight / spans.length / 2;
+      return event.clientY >= top && event.clientY < top + bar.clientHeight / spans.length;
+    });
+    magnifyIndex(event.clientY);
+    if (hit) jumpToLetter(hit.dataset.letter);
   };
   bar.addEventListener('pointerdown', event => {
     event.preventDefault();
@@ -235,7 +269,10 @@ function setupIndex() {
   bar.addEventListener('pointermove', event => {
     if (bar.hasPointerCapture(event.pointerId)) pick(event);
   });
-  const release = () => { hideTimer = setTimeout(() => $('azBubble').classList.add('hidden'), 500); };
+  const release = () => {
+    resetIndexMagnifier();
+    hideTimer = setTimeout(() => $('azBubble').classList.add('hidden'), 500);
+  };
   bar.addEventListener('pointerup', release);
   bar.addEventListener('pointercancel', release);
 

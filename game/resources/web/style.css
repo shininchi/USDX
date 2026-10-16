@@ -535,13 +535,22 @@ main { padding: 12px 14px 80px; }
   user-select: none;
   -webkit-user-select: none;
 }
-.az-index span { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; }
+.az-index span {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  transition: transform .08s ease-out;
+  transform-origin: center right;
+}
+.az-index span.near { color: #fff; text-shadow: 0 0 6px var(--accent); }
 .az-index span.off { color: var(--line); }
 .az-bubble {
   position: fixed;
   left: 50%;
   top: 45%;
-  transform: translate(-50%, -50%);
+  transform: translateY(-50%);
   z-index: 30;
   width: 84px;
   height: 84px;
