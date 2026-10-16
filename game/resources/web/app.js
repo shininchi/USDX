@@ -198,11 +198,36 @@ function togglePreview(song, button) {
   preview.audio = audio;
   preview.button = button;
   button.textContent = `■ ${t('stop_listening')}`;
+  // play() has to be called right in the click handler, otherwise browsers
+  // like Firefox block the sound. It starts silent and jumps to the preview
+  // position as soon as the length of the song is known.
+  // muted instead of volume 0: iOS ignores the volume property
+  audio.muted = true;
+  const play = () => audio.play().catch(error => {
+    if (preview.audio !== audio) return;
+    console.warn('Audio preview:', error.name, error.message);
+    // Firefox aborts the first play() when the position changes while the
+    // file is loading; only a real autoplay block is reported.
+    if (error.name === 'NotAllowedError') {
+      stopPreview();
+      toast(t('err_audio_blocked'), 'error');
+    }
+  });
   audio.addEventListener('loadedmetadata', () => {
+    audio.addEventListener('seeked', () => {
+      if (preview.audio !== audio) return;
+      audio.muted = false;
+      if (audio.paused) play();
+    }, { once: true });
     audio.currentTime = previewStart(song, audio.duration || 0);
-    audio.play().catch(() => stopPreview());
   }, { once: true });
-  audio.addEventListener('error', () => { if (preview.audio === audio) stopPreview(); });
+  audio.addEventListener('error', () => {
+    if (preview.audio !== audio) return;
+    console.warn('Audio preview error:', audio.error && audio.error.code);
+    stopPreview();
+    toast(t('err_generic'), 'error');
+  });
+  play();
   // fade out at the end of the preview
   preview.timer = setTimeout(() => {
     preview.fade = setInterval(() => {
