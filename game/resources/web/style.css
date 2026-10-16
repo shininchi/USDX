@@ -102,12 +102,21 @@ header.top {
   background: var(--bg-3);
   color: var(--muted);
   font-size: 13px;
-  max-width: 38vw;
+  min-width: 0;
   flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#nickChip { max-width: 38vw; }
+header.top.compact .brand span { display: none; }
 
 .chip.active { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 
@@ -479,4 +488,5 @@ main { padding: 12px 14px 80px; }
   .top-row { gap: 6px; padding: 10px 12px; }
   .brand { font-size: 16px; }
   .chip { padding: 4px 8px; font-size: 12px; gap: 4px; }
+  #nickChip { max-width: 32vw; }
 }

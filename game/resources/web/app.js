@@ -26,14 +26,24 @@ const $ = id => document.getElementById(id);
 async function loadInfo() {
   state.info = await api('/api/info');
   applyAccent(state.info.accent);
-  $('nickChip').textContent = state.info.me.nick ? `👤 ${state.info.me.nick}` : `👤 ${t('change_nick')}`;
+  $('nickChip').replaceChildren('👤', el('span', { class: 'chip-text', text: state.info.me.nick || t('change_nick') }));
+  fitHeader();
   $('pausedNotice').classList.toggle('hidden', !state.info.paused);
   return state.info;
 }
 
+// Long nicknames end in "…"; if the title still does not fit, only its icon
+// is shown.
+function fitHeader() {
+  const header = document.querySelector('header.top');
+  const brand = header.querySelector('.brand');
+  header.classList.remove('compact');
+  if (brand.scrollWidth > brand.clientWidth) header.classList.add('compact');
+}
+
 function renderAutoplay() {
   const chip = $('autoplayChip');
-  chip.textContent = `${state.autoplay ? '🔊' : '🔇'} ${t('autoplay')}`;
+  chip.replaceChildren(state.autoplay ? '🔊' : '🔇', el('span', { class: 'chip-text', text: t('autoplay') }));
   chip.classList.toggle('active', state.autoplay);
   chip.setAttribute('aria-pressed', state.autoplay ? 'true' : 'false');
   chip.title = t(state.autoplay ? 'autoplay_on' : 'autoplay_off');
@@ -505,6 +515,7 @@ async function start() {
   $('nickChip').addEventListener('click', askNick);
   $('autoplayChip').addEventListener('click', toggleAutoplay);
   renderAutoplay();
+  window.addEventListener('resize', debounce(fitHeader, 150));
 
   new IntersectionObserver(entries => {
     if (entries.some(e => e.isIntersecting)) loadSongs(false);
