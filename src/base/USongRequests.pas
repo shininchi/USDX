@@ -58,6 +58,7 @@ type
     AllowRemote:    boolean;    // accept clients outside of private networks
     QRTimeout:      integer;    // seconds, 0 = until the key is pressed again
     AdminPin:       UTF8String;
+    FFmpeg:         UTF8String; // ffmpeg executable for video previews, empty = autodetect
   end;
 
   TSongRequestsSettings = record
@@ -129,6 +130,13 @@ type
   end;
   TSRQueueEntries = array of TSRQueueEntry;
 
+  TSRActivity = record
+    Time:   int64;      // unix time, UTC
+    Kind:   UTF8String; // request, vote, withdraw, join, nick, sung, admin_*, ...
+    Who:    UTF8String; // nickname, "admin" or an IP address
+    Detail: UTF8String; // song or other details, depending on the kind
+  end;
+
   TSRUser = class
     Id:            UTF8String;
     Nick:          UTF8String;
@@ -167,6 +175,22 @@ type
 
       fAccent:        UTF8String; // theme color as #rrggbb for the web client
 
+      fActivity:      array of TSRActivity; // oldest first
+
+      // video preview clips, made by a worker thread with ffmpeg
+      fFFmpeg:        UTF8String; // empty = clips not available
+      fClipDir:       IPath;
+      fClipJobs:      TStringList; // target=video|start
+      fClipFailed:    TStringList; // targets that could not be made
+      fClipEvent:     TEvent;
+      fClipWorker:    TThread;
+
+      // song being sung right now
+      fNowKey, fNowArtist, fNowTitle, fNowPlayers: UTF8String;
+      fNowStartedAt: double; // unix time in seconds, 0 = nothing is sung
+      fNowOffset:    double; // song position when it started, seconds
+      fNowDuration:  double; // seconds
+
       // last new request, shown in the game
       fNewRequestSeq:  integer;
       fNewRequestText: UTF8String;
@@ -175,10 +199,14 @@ type
       fAdminSessions: TStringList; // session tokens
       fFailedLogins:  TStringList; // ip = count;unix time of first failure
 
+      function NextClipJob(out Target, Video: UTF8String; out Start: double): boolean;
+      procedure ClipDone(const Target: UTF8String; Success: boolean);
       procedure LoadConfig;
       procedure LoadState;
       procedure SaveState;
       procedure MarkDirty;
+      procedure AddActivity(const Kind, Who, Detail: UTF8String);
+      procedure RemoveVotesOf(const UserId: UTF8String);
 
       procedure RebuildCatalog;
       procedure LoadStats;
@@ -216,6 +244,10 @@ type
       function WithdrawVote(const UserId: UTF8String; Id: integer): UTF8String;
       function CoverFile(Id: integer; Thumbnail: boolean): UTF8String;
       function AudioFile(Id: integer): UTF8String;
+      {* Returns the path of a short muted preview clip of the song's video.
+       * Status is 200 when the clip is ready, 202 while it is being made and
+       * 404 when there is none. *}
+      function VideoClip(Id: integer; out Status: integer): UTF8String;
 
       // admin API
       function AdminLogin(const IP, Pin: UTF8String; out Token: UTF8String): UTF8String;
@@ -224,10 +256,14 @@ type
       function AdminQueueAction(const Action, Key: UTF8String): UTF8String;
       function AdminUserAction(const Action, Id, Value: UTF8String): UTF8String;
       function AdminSettings(Data: TJSONObject): UTF8String;
+      function AdminIPAction(const Action, IP: UTF8String): UTF8String;
+      function AdminMaintenance(const Action: UTF8String): UTF8String;
 
       // game API (main thread)
       procedure MarkSung(const Artist, Title: UTF8String);
       function QueueSnapshot: TSRQueueEntries;
+      procedure SetNowPlaying(const Artist, Title, Players: UTF8String; Position, Duration: double);
+      procedure ClearNowPlaying;
       {* Returns a number that grows with every new request (not with votes)
        * and the description of the latest one. *}
       function NewRequestSeq(out Text: UTF8String): integer;
@@ -248,6 +284,7 @@ uses
   DateUtils,
   IniFiles,
   Math,
+  Process,
   Sockets,
   FPImage,
   FPReadJPEG,
@@ -270,6 +307,9 @@ const
   STATE_VERSION      = 1;
   SAVE_INTERVAL_SEC  = 2;
   STATS_INTERVAL_SEC = 60;
+  MAX_ACTIVITY       = 300;
+  CLIP_SECONDS       = 10;
+  CLIP_HEIGHT        = 360;
   THUMB_SIZE         = 240;
   MAX_NICK_LENGTH    = 24;
   MAX_FAILED_LOGINS  = 5;
@@ -354,6 +394,135 @@ begin
   end;
 end;
 
+type
+  TSRClipWorker = class(TThread)
+    private
+      fOwner: TSongRequests;
+      function MakeClip(const Video, Target: UTF8String; Start: double): boolean;
+    protected
+      procedure Execute; override;
+    public
+      constructor Create(Owner: TSongRequests);
+  end;
+
+function FindFFmpeg(const Configured: UTF8String): UTF8String;
+const
+  // apps started from the Finder do not get the shell's PATH
+  CANDIDATES: array[0..3] of string = (
+    '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', 'C:\ffmpeg\bin\ffmpeg.exe');
+var
+  I: integer;
+begin
+  Result := '';
+  if (Configured <> '') then
+  begin
+    if FileExists(Configured) then
+      Result := Configured;
+    Exit;
+  end;
+  for I := Low(CANDIDATES) to High(CANDIDATES) do
+    if FileExists(CANDIDATES[I]) then
+    begin
+      Result := CANDIDATES[I];
+      Exit;
+    end;
+  Result := ExeSearch('ffmpeg', GetEnvironmentVariable('PATH'));
+end;
+
+function FileSizeOf(const FileName: UTF8String): int64;
+var
+  Info: TSearchRec;
+begin
+  Result := -1;
+  if FindFirst(FileName, faAnyFile, Info) = 0 then
+  begin
+    Result := Info.Size;
+    FindClose(Info);
+  end;
+end;
+
+{ TSRClipWorker }
+
+constructor TSRClipWorker.Create(Owner: TSongRequests);
+begin
+  fOwner := Owner;
+  inherited Create(false);
+end;
+
+function TSRClipWorker.MakeClip(const Video, Target: UTF8String; Start: double): boolean;
+var
+  Proc:    TProcess;
+  TmpFile: UTF8String;
+  Fmt:     TFormatSettings;
+begin
+  Fmt := DefaultFormatSettings;
+  Fmt.DecimalSeparator := '.';
+  TmpFile := Target + '.tmp.mp4';
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := fOwner.fFFmpeg;
+    Proc.Parameters.Add('-nostdin');
+    Proc.Parameters.Add('-loglevel');
+    Proc.Parameters.Add('error');
+    Proc.Parameters.Add('-y');
+    Proc.Parameters.Add('-ss');
+    Proc.Parameters.Add(FormatFloat('0.00', Start, Fmt));
+    Proc.Parameters.Add('-i');
+    Proc.Parameters.Add(Video);
+    Proc.Parameters.Add('-t');
+    Proc.Parameters.Add(IntToStr(CLIP_SECONDS));
+    Proc.Parameters.Add('-an');
+    Proc.Parameters.Add('-vf');
+    Proc.Parameters.Add(Format('scale=-2:%d', [CLIP_HEIGHT]));
+    Proc.Parameters.Add('-c:v');
+    Proc.Parameters.Add('libx264');
+    Proc.Parameters.Add('-preset');
+    Proc.Parameters.Add('veryfast');
+    Proc.Parameters.Add('-crf');
+    Proc.Parameters.Add('28');
+    Proc.Parameters.Add('-pix_fmt');
+    Proc.Parameters.Add('yuv420p');
+    Proc.Parameters.Add('-movflags');
+    Proc.Parameters.Add('+faststart');
+    Proc.Parameters.Add(TmpFile);
+    Proc.Options := [poWaitOnExit, poNoConsole];
+    try
+      Proc.Execute;
+    except
+      on E: Exception do
+        Log.LogWarn('Could not run ffmpeg: ' + E.Message, 'TSRClipWorker');
+    end;
+    // a start past the end of the video gives an empty clip
+    Result := FileSizeOf(TmpFile) > 2048;
+    if Result then
+      Result := RenameFile(TmpFile, Target);
+    if FileExists(TmpFile) then
+      DeleteFile(TmpFile);
+  finally
+    Proc.Free;
+  end;
+end;
+
+procedure TSRClipWorker.Execute;
+var
+  Target, Video: UTF8String;
+  Start:         double;
+  Success:       boolean;
+begin
+  while not Terminated do
+  begin
+    if not fOwner.NextClipJob(Target, Video, Start) then
+    begin
+      fOwner.fClipEvent.WaitFor(1000);
+      Continue;
+    end;
+    Success := MakeClip(Video, Target, Start);
+    if (not Success) and (Start > 0) and (not Terminated) then
+      Success := MakeClip(Video, Target, 0);
+    fOwner.ClipDone(Target, Success);
+  end;
+end;
+
 { TSRRequest }
 
 constructor TSRRequest.Create;
@@ -427,6 +596,10 @@ begin
     fScoreFile := Params.ScoreFile;
   fStateFile := Platform.GetGameUserPath.Append('SongRequests.json');
   fThumbDir := Platform.GetGameUserPath.Append('cache').Append('request-covers');
+  fClipDir := Platform.GetGameUserPath.Append('cache').Append('request-videos');
+  fClipJobs := TStringList.Create;
+  fClipFailed := TStringList.Create;
+  fClipEvent := TEvent.Create(nil, false, false, '');
 
   fSettings.Paused := false;
   fSettings.MaxPendingPerUser := 3;
@@ -435,10 +608,32 @@ begin
 
   LoadConfig;
   LoadState;
+
+  if fConfig.Enabled then
+  begin
+    fFFmpeg := FindFFmpeg(fConfig.FFmpeg);
+    if fFFmpeg <> '' then
+    begin
+      Log.LogStatus('Video previews made with ' + fFFmpeg, 'TSongRequests');
+      fClipWorker := TSRClipWorker.Create(Self);
+    end
+    else
+      Log.LogStatus('ffmpeg not found, no video previews', 'TSongRequests');
+  end;
 end;
 
 destructor TSongRequests.Destroy;
 begin
+  if fClipWorker <> nil then
+  begin
+    fClipWorker.Terminate;
+    fClipEvent.SetEvent;
+    fClipWorker.WaitFor;
+    fClipWorker.Free;
+  end;
+  fClipEvent.Free;
+  fClipJobs.Free;
+  fClipFailed.Free;
   if fDirty then
     SaveState;
   fQueue.Free;
@@ -468,6 +663,7 @@ begin
     fConfig.AllowRemote := SameText(IniFile.ReadString(INI_SECTION, 'AllowRemote', 'Off'), 'On');
     fConfig.QRTimeout := IniFile.ReadInteger(INI_SECTION, 'QRTimeout', 30);
     fConfig.AdminPin := Trim(IniFile.ReadString(INI_SECTION, 'AdminPin', ''));
+    fConfig.FFmpeg := Trim(IniFile.ReadString(INI_SECTION, 'FFmpeg', ''));
   finally
     IniFile.Free;
   end;
@@ -610,6 +806,24 @@ begin
       for I := 0 to O.Count - 1 do
         fRequestCounts.Values[O.Names[I]] := IntToStr(O.Items[I].AsInteger);
 
+    Arr := Root.Get('activity', TJSONArray(nil));
+    if Arr <> nil then
+    begin
+      SetLength(fActivity, 0);
+      for I := Max(0, Arr.Count - MAX_ACTIVITY) to Arr.Count - 1 do
+      begin
+        if not (Arr[I] is TJSONObject) then
+          Continue;
+        O := TJSONObject(Arr[I]);
+        J := Length(fActivity);
+        SetLength(fActivity, J + 1);
+        fActivity[J].Time := O.Get('t', int64(0));
+        fActivity[J].Kind := O.Get('k', '');
+        fActivity[J].Who := O.Get('w', '');
+        fActivity[J].Detail := O.Get('d', '');
+      end;
+    end;
+
     SortQueue;
   finally
     Data.Free;
@@ -691,6 +905,18 @@ begin
       O.Add(fRequestCounts.Names[I], StrToIntDef(fRequestCounts.ValueFromIndex[I], 0));
     Root.Add('requestCounts', O);
 
+    Arr := TJSONArray.Create;
+    for I := 0 to High(fActivity) do
+    begin
+      O := TJSONObject.Create;
+      O.Add('t', fActivity[I].Time);
+      O.Add('k', fActivity[I].Kind);
+      O.Add('w', fActivity[I].Who);
+      O.Add('d', fActivity[I].Detail);
+      Arr.Add(O);
+    end;
+    Root.Add('activity', Arr);
+
     Content := Root.FormatJSON;
   finally
     Root.Free;
@@ -720,6 +946,45 @@ end;
 procedure TSongRequests.MarkDirty;
 begin
   fDirty := true;
+end;
+
+{* Appends to the activity log; the caller holds the lock. *}
+procedure TSongRequests.AddActivity(const Kind, Who, Detail: UTF8String);
+var
+  I, N: integer;
+begin
+  N := Length(fActivity);
+  if N >= MAX_ACTIVITY then
+  begin
+    // drop the oldest entry
+    for I := 0 to N - 2 do
+      fActivity[I] := fActivity[I + 1];
+    Dec(N);
+  end
+  else
+    SetLength(fActivity, N + 1);
+  fActivity[N].Time := UnixNow;
+  fActivity[N].Kind := Kind;
+  fActivity[N].Who := Who;
+  fActivity[N].Detail := Detail;
+  MarkDirty;
+end;
+
+{* Removes all votes of a user and the requests left without votes; the
+ * caller holds the lock. *}
+procedure TSongRequests.RemoveVotesOf(const UserId: UTF8String);
+var
+  I, VoteIdx: integer;
+begin
+  for I := fQueue.Count - 1 downto 0 do
+  begin
+    VoteIdx := TSRRequest(fQueue[I]).Voters.IndexOf(UserId);
+    if VoteIdx >= 0 then
+      TSRRequest(fQueue[I]).Voters.Delete(VoteIdx);
+    if TSRRequest(fQueue[I]).Voters.Count = 0 then
+      fQueue.Delete(I);
+  end;
+  SortQueue;
 end;
 
 { catalog }
@@ -959,7 +1224,10 @@ begin
     fLastSung.Values[Key] := IntToStr(UnixNow);
     Request := FindRequest(Key);
     if Request <> nil then
+    begin
+      AddActivity('sung', '', Request.Artist + ' - ' + Request.Title);
       fQueue.Remove(Request);
+    end;
     fStatsLoadedAt := 0;
     MarkDirty;
   finally
@@ -999,6 +1267,32 @@ begin
   end;
 end;
 
+procedure TSongRequests.SetNowPlaying(const Artist, Title, Players: UTF8String; Position, Duration: double);
+begin
+  fLock.Enter;
+  try
+    fNowKey := SongRequestKey(Artist, Title);
+    fNowArtist := Artist;
+    fNowTitle := Title;
+    fNowPlayers := Players;
+    fNowStartedAt := (NowUTC - UnixDateDelta) * SecsPerDay;
+    fNowOffset := Position;
+    fNowDuration := Duration;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.ClearNowPlaying;
+begin
+  fLock.Enter;
+  try
+    fNowStartedAt := 0;
+  finally
+    fLock.Leave;
+  end;
+end;
+
 function TSongRequests.NewRequestSeq(out Text: UTF8String): integer;
 begin
   fLock.Enter;
@@ -1031,6 +1325,7 @@ begin
     Result.Add('video', HasVideo);
     Result.Add('cover', CoverFile <> '');
     Result.Add('audio', AudioFile <> '');
+    Result.Add('clip', (VideoFile <> '') and (fFFmpeg <> ''));
     Result.Add('previewStart', PreviewStart);
     Result.Add('start', StartSec);
     Result.Add('finish', FinishSec);
@@ -1214,12 +1509,15 @@ begin
       User.Id := UserId;
       User.CreatedAt := NowUTC;
       fUsers.Add(User);
+      AddActivity('join', Clean, IP);
     end
     else if User.Blocked then
     begin
       Result := 'blocked';
       Exit;
-    end;
+    end
+    else if User.Nick <> Clean then
+      AddActivity('nick', Clean, User.Nick);
     User.Nick := Clean;
     User.LastIP := IP;
     User.LastSeen := NowUTC;
@@ -1440,14 +1738,30 @@ end;
 
 function TSongRequests.QueueJSON(const UserId: UTF8String): UTF8String;
 var
-  Root:  TJSONObject;
+  Root, Now: TJSONObject;
   Items: TJSONArray;
-  I:     integer;
+  I, Idx: integer;
 begin
   Root := TJSONObject.Create;
   fLock.Enter;
   try
     Root.Add('paused', fSettings.Paused);
+    if fNowStartedAt > 0 then
+    begin
+      Now := TJSONObject.Create;
+      Idx := FindSongIndex(fNowKey);
+      Now.Add('id', Idx);
+      Now.Add('artist', fNowArtist);
+      Now.Add('title', fNowTitle);
+      Now.Add('players', fNowPlayers);
+      Now.Add('cover', (Idx >= 0) and (fSongs[Idx].CoverFile <> ''));
+      Now.Add('startedAt', fNowStartedAt);
+      Now.Add('offset', fNowOffset);
+      Now.Add('duration', fNowDuration);
+      Root.Add('now', Now);
+    end
+    else
+      Root.Add('now', TJSONNull.Create);
     Items := TJSONArray.Create;
     for I := 0 to fQueue.Count - 1 do
       Items.Add(RequestToJSON(TSRRequest(fQueue[I]), UserId, false));
@@ -1535,7 +1849,10 @@ begin
       fQueue.Add(Request);
       Inc(fNewRequestSeq);
       fNewRequestText := Request.Artist + ' - ' + Request.Title + ' (' + User.Nick + ')';
-    end;
+      AddActivity('request', User.Nick, Request.Artist + ' - ' + Request.Title);
+    end
+    else
+      AddActivity('vote', User.Nick, Request.Artist + ' - ' + Request.Title);
 
     Request.Voters.Add(UserId);
     User.LastRequestAt := NowUTC;
@@ -1566,6 +1883,8 @@ begin
     if I < 0 then
       Exit;
     Request.Voters.Delete(I);
+    if FindUser(UserId) <> nil then
+      AddActivity('withdraw', FindUser(UserId).Nick, Request.Artist + ' - ' + Request.Title);
     if Request.Voters.Count = 0 then
       fQueue.Remove(Request)
     else
@@ -1701,6 +2020,85 @@ begin
   end;
 end;
 
+function TSongRequests.VideoClip(Id: integer; out Status: integer): UTF8String;
+var
+  Start:  double;
+  Song:   TSRSong;
+  Target: UTF8String;
+begin
+  Result := '';
+  Status := 404;
+  fLock.Enter;
+  try
+    if (fFFmpeg = '') or (Id < 0) or (Id > High(fSongs)) or (fSongs[Id].VideoFile = '') then
+      Exit;
+    Song := fSongs[Id];
+    Target := fClipDir.Append(Format('%.8x.mp4', [HashString(Song.Key + '|' + Song.VideoFile)])).ToNative;
+
+    if FileExists(Target) then
+    begin
+      Result := Target;
+      Status := 200;
+      Exit;
+    end;
+    if fClipFailed.IndexOf(Target) >= 0 then
+      Exit;
+
+    Status := 202;
+    if fClipJobs.IndexOfName(Target) >= 0 then
+      Exit;
+
+    // the clip starts where the audio preview starts; the video runs
+    // VideoGap seconds ahead of the audio
+    if Song.PreviewStart >= 0 then
+      Start := Song.PreviewStart
+    else if Song.FinishSec > Song.StartSec then
+      Start := Song.StartSec + Min(60, (Song.FinishSec - Song.StartSec) / 4)
+    else
+      Start := Song.StartSec + 45;
+    Start := Max(0, Start + Song.VideoGap);
+    // the newest request goes first, older ones may belong to closed pages
+    fClipJobs.Insert(0, Target + '=' + Song.VideoFile + '|' + FloatToStr(Start, DefaultFormatSettings));
+  finally
+    fLock.Leave;
+  end;
+  ForceDirectories(fClipDir.ToNative);
+  fClipEvent.SetEvent;
+end;
+
+function TSongRequests.NextClipJob(out Target, Video: UTF8String; out Start: double): boolean;
+var
+  Value: UTF8String;
+  P:     integer;
+begin
+  fLock.Enter;
+  try
+    Result := fClipJobs.Count > 0;
+    if not Result then
+      Exit;
+    Target := fClipJobs.Names[0];
+    Value := fClipJobs.ValueFromIndex[0];
+    P := LastDelimiter('|', Value);
+    Video := Copy(Value, 1, P - 1);
+    Start := StrToFloatDef(Copy(Value, P + 1, MaxInt), 0, DefaultFormatSettings);
+    fClipJobs.Delete(0);
+  finally
+    fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.ClipDone(const Target: UTF8String; Success: boolean);
+begin
+  if Success then
+    Exit;
+  fLock.Enter;
+  try
+    fClipFailed.Add(Target);
+  finally
+    fLock.Leave;
+  end;
+end;
+
 { admin API }
 
 function TSongRequests.AdminLogin(const IP, Pin: UTF8String; out Token: UTF8String): UTF8String;
@@ -1738,6 +2136,7 @@ begin
       fFailedLogins.Values[IP] := '';
       Token := RandomToken(32);
       fAdminSessions.Add(Token);
+      AddActivity('admin_login', IP, '');
       Result := '';
     end
     else
@@ -1745,6 +2144,7 @@ begin
       if Count = 0 then
         Since := UnixNow;
       fFailedLogins.Values[IP] := IntToStr(Count + 1) + ';' + IntToStr(Since);
+      AddActivity('admin_fail', IP, '');
       Result := 'wrong_pin';
     end;
   finally
@@ -1769,7 +2169,7 @@ end;
 
 function TSongRequests.AdminStateJSON: UTF8String;
 var
-  Root, S: TJSONObject;
+  Root, S, A: TJSONObject;
   Arr:     TJSONArray;
   I:       integer;
 begin
@@ -1798,6 +2198,30 @@ begin
       Arr.Add(fBlockedIPs[I]);
     Root.Add('blockedIps', Arr);
 
+    // newest first
+    Arr := TJSONArray.Create;
+    for I := High(fActivity) downto 0 do
+    begin
+      A := TJSONObject.Create;
+      A.Add('time', fActivity[I].Time);
+      A.Add('kind', fActivity[I].Kind);
+      A.Add('who', fActivity[I].Who);
+      A.Add('detail', fActivity[I].Detail);
+      Arr.Add(A);
+    end;
+    Root.Add('activity', Arr);
+
+    if fNowStartedAt > 0 then
+    begin
+      A := TJSONObject.Create;
+      A.Add('artist', fNowArtist);
+      A.Add('title', fNowTitle);
+      A.Add('players', fNowPlayers);
+      Root.Add('now', A);
+    end
+    else
+      Root.Add('now', TJSONNull.Create);
+
     Result := Root.AsJSON;
   finally
     fLock.Leave;
@@ -1817,6 +2241,7 @@ begin
     if Action = 'clear' then
     begin
       fQueue.Clear;
+      AddActivity('admin_clear', 'admin', '');
       MarkDirty;
       Exit;
     end;
@@ -1828,6 +2253,8 @@ begin
       Exit;
     end;
     Idx := fQueue.IndexOf(Request);
+    if (Action = 'remove') or (Action = 'sung') or (Action = 'pin') or (Action = 'unpin') then
+      AddActivity('admin_' + Action, 'admin', Request.Artist + ' - ' + Request.Title);
 
     if Action = 'remove' then
       fQueue.Remove(Request)
@@ -1895,7 +2322,6 @@ function TSongRequests.AdminUserAction(const Action, Id, Value: UTF8String): UTF
 var
   User:    TSRUser;
   I:       integer;
-  VoteIdx: integer;
   Minutes: integer;
 begin
   Result := '';
@@ -1908,21 +2334,20 @@ begin
       Exit;
     end;
 
+    AddActivity('admin_' + Action, 'admin', User.Nick);
+
     if Action = 'block' then
     begin
       User.Blocked := true;
       if User.LastIP <> '' then
         fBlockedIPs.Add(User.LastIP);
       // drop the requests of a blocked user
-      for I := fQueue.Count - 1 downto 0 do
-      begin
-        VoteIdx := TSRRequest(fQueue[I]).Voters.IndexOf(User.Id);
-        if VoteIdx >= 0 then
-          TSRRequest(fQueue[I]).Voters.Delete(VoteIdx);
-        if TSRRequest(fQueue[I]).Voters.Count = 0 then
-          fQueue.Delete(I);
-      end;
-      SortQueue;
+      RemoveVotesOf(User.Id);
+    end
+    else if Action = 'delete' then
+    begin
+      RemoveVotesOf(User.Id);
+      fUsers.Remove(User);
     end
     else if Action = 'unblock' then
     begin
@@ -1969,7 +2394,60 @@ begin
     fSettings.MaxPendingPerUser := Max(0, Data.Get('maxPending', fSettings.MaxPendingPerUser));
     fSettings.CooldownSeconds := Max(0, Data.Get('cooldown', fSettings.CooldownSeconds));
     fSettings.RecentMinutes := Max(0, Data.Get('recentMinutes', fSettings.RecentMinutes));
+    AddActivity('admin_settings', 'admin', '');
     MarkDirty;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.AdminIPAction(const Action, IP: UTF8String): UTF8String;
+var
+  I: integer;
+begin
+  Result := '';
+  fLock.Enter;
+  try
+    if Action <> 'unblock' then
+    begin
+      Result := 'unknown_action';
+      Exit;
+    end;
+    I := fBlockedIPs.IndexOf(IP);
+    if I < 0 then
+    begin
+      Result := 'not_found';
+      Exit;
+    end;
+    fBlockedIPs.Delete(I);
+    // users on that address can request again
+    for I := 0 to fUsers.Count - 1 do
+      if TSRUser(fUsers[I]).LastIP = IP then
+        TSRUser(fUsers[I]).Blocked := false;
+    AddActivity('admin_unblock_ip', 'admin', IP);
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.AdminMaintenance(const Action: UTF8String): UTF8String;
+begin
+  Result := '';
+  fLock.Enter;
+  try
+    if Action = 'reset_stats' then
+    begin
+      fRequestCounts.Clear;
+      fLastSung.Clear;
+      AddActivity('admin_reset_stats', 'admin', '');
+    end
+    else if Action = 'clear_activity' then
+    begin
+      SetLength(fActivity, 0);
+      MarkDirty;
+    end
+    else
+      Result := 'unknown_action';
   finally
     fLock.Leave;
   end;

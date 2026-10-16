@@ -434,6 +434,7 @@ var
   Id:     integer;
   WebDir: UTF8String;
   JSON:   UTF8String;
+  Status: integer;
 
   function QueryInt(const Name: UTF8String; Default: integer): integer;
   begin
@@ -557,6 +558,17 @@ begin
         Id := StrToIntDef(Copy(URLPath, Length('/api/audio/') + 1, MaxInt), -1);
         SendMediaFile(ARequest, AResponse, SongRequests.AudioFile(Id));
       end
+      else if (Pos('/api/video/', URLPath) = 1) and (Method = 'GET') then
+      begin
+        Id := StrToIntDef(Copy(URLPath, Length('/api/video/') + 1, MaxInt), -1);
+        JSON := SongRequests.VideoClip(Id, Status);
+        if Status = 200 then
+          SendMediaFile(ARequest, AResponse, JSON)
+        else if Status = 202 then
+          SendJSON(AResponse, 202, '{"status":"pending"}')
+        else
+          SendError(AResponse, 404, 'not_found');
+      end
       else if (URLPath = '/api/queue') and (Method = 'GET') then
         SendJSON(AResponse, 200, SongRequests.QueueJSON(UserId))
       else if (URLPath = '/api/request') and (Method = 'POST') then
@@ -587,6 +599,10 @@ begin
           SendResult(AResponse, SongRequests.AdminQueueAction(BodyStr('action'), BodyStr('key')))
         else if (URLPath = '/api/admin/user') and (Method = 'POST') then
           SendResult(AResponse, SongRequests.AdminUserAction(BodyStr('action'), BodyStr('id'), BodyStr('value')))
+        else if (URLPath = '/api/admin/ip') and (Method = 'POST') then
+          SendResult(AResponse, SongRequests.AdminIPAction(BodyStr('action'), BodyStr('ip')))
+        else if (URLPath = '/api/admin/maintenance') and (Method = 'POST') then
+          SendResult(AResponse, SongRequests.AdminMaintenance(BodyStr('action')))
         else if (URLPath = '/api/admin/settings') and (Method = 'POST') then
         begin
           if Body = nil then

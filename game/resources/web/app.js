@@ -212,6 +212,33 @@ function togglePreview(song, button) {
   }, (PREVIEW_SECONDS - 2) * 1000);
 }
 
+// ---------- video preview ----------
+
+// Asks the game for the preview clip, waiting while ffmpeg makes it, and
+// fades the cover into the muted video once it plays.
+async function loadClip(song, cover, isOpen) {
+  for (let attempt = 0; attempt < 30 && isOpen(); attempt++) {
+    let response;
+    try {
+      response = await fetch(`/api/video/${song.id}`, { headers: { Range: 'bytes=0-0' } });
+    } catch (e) {
+      return;
+    }
+    if (response.status === 202) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      continue;
+    }
+    if (!response.ok || !isOpen()) return;
+    const video = el('video', { class: 'cover-video', muted: true, playsinline: true, loop: true, autoplay: true, preload: 'auto' });
+    video.muted = true; // the attribute alone is not enough for autoplay in Safari
+    video.addEventListener('playing', () => setTimeout(() => video.classList.add('visible'), 1000), { once: true });
+    video.src = `/api/video/${song.id}`;
+    cover.append(video);
+    video.play().catch(() => {});
+    return;
+  }
+}
+
 // ---------- song detail ----------
 
 async function openSong(id) {
@@ -264,8 +291,12 @@ async function openSong(id) {
     : null;
   if (listen) listen.addEventListener('click', () => togglePreview(song, listen));
 
+  const cover = coverNode(song, true);
+  let open = true;
+  if (song.clip) loadClip(song, cover, () => open);
+
   close = openSheet(el('div', { class: 'detail' },
-    coverNode(song, true),
+    cover,
     el('h2', { text: song.title }),
     el('div', { class: 'artist', text: song.artist }),
     listen,
@@ -273,7 +304,11 @@ async function openSong(id) {
     stats,
     el('h3', { text: t('top_scores') }),
     scores,
-    row), stopPreview);
+    row), () => {
+      open = false;
+      stopPreview();
+      cover.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); });
+    });
 }
 
 // ---------- queue ----------
@@ -303,9 +338,42 @@ async function queueVote(item, path, okText) {
   }
 }
 
+// ---------- now playing ----------
+
+let nowPlaying = null;
+
+function renderNowPlaying(now) {
+  const box = $('nowPlaying');
+  const sameSong = now && nowPlaying && now.startedAt === nowPlaying.startedAt;
+  nowPlaying = now;
+  if (!now) {
+    box.classList.add('hidden');
+    box.replaceChildren();
+    return;
+  }
+  box.classList.remove('hidden');
+  if (sameSong) return; // keep the cover image, only the progress moves
+  box.replaceChildren(
+    coverNode(now),
+    el('div', { class: 'now-text' },
+      el('div', { class: 'now-label', text: `♪ ${t('now_playing')}` }),
+      el('div', { class: 'now-title', text: `${now.title} — ${now.artist}` }),
+      now.players ? el('div', { class: 'now-players', text: `${t('singing')}: ${now.players}` }) : null),
+    el('div', { class: 'now-progress' }, el('div', { class: 'now-bar', id: 'nowBar' })));
+  updateNowProgress();
+}
+
+function updateNowProgress() {
+  if (!nowPlaying || !nowPlaying.duration) return;
+  const position = Date.now() / 1000 - nowPlaying.startedAt + nowPlaying.offset;
+  const bar = $('nowBar');
+  if (bar) bar.style.width = `${Math.min(100, Math.max(0, position / nowPlaying.duration * 100))}%`;
+}
+
 async function refreshQueue() {
   try {
     const data = await api('/api/queue');
+    renderNowPlaying(data.now);
     state.queue = data.items;
     $('queueBadge').textContent = data.items.length;
     $('queueBadge').classList.toggle('hidden', data.items.length === 0);
@@ -373,6 +441,7 @@ async function start() {
   if (!state.info.me.nick) askNick();
 
   setInterval(refreshQueue, 10000);
+  setInterval(updateNowProgress, 1000);
   setInterval(() => loadInfo().catch(() => {}), 30000);
 }
 

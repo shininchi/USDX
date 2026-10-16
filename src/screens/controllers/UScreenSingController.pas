@@ -83,6 +83,7 @@ type
     procedure ClearLyricEngines();
     procedure CalculateStartTime;
     procedure SaveLocalScores;
+    procedure ReportNowPlaying;
   public
     CheckPlayerConfigOnNextSong: boolean;
     eSongLoaded: THookableEvent; //< event is called after lyrics of a song are loaded on OnShow
@@ -909,6 +910,8 @@ begin
     LyricsState.TotalTime := AudioPlayback.Length;
   end;
 
+  ReportNowPlaying;
+
   LyricsState.UpdateBeats();
 
   // synchronize music
@@ -1381,8 +1384,30 @@ begin
   Settings.Finish := True;
 end;
 
+{* Tells the song request web client what is being sung. *}
+procedure TScreenSingController.ReportNowPlaying;
+var
+  I:       integer;
+  Players: UTF8String;
+begin
+  if (SongRequests = nil) then
+    Exit;
+  Players := '';
+  for I := 0 to PlayersPlay - 1 do
+  begin
+    if (Players <> '') then
+      Players := Players + ', ';
+    Players := Players + Player[I].Name;
+  end;
+  SongRequests.SetNowPlaying(CurrentSong.Artist, CurrentSong.Title, Players,
+    LyricsState.GetCurrentTime(), LyricsState.TotalTime);
+end;
+
 procedure TScreenSingController.OnHide;
 begin
+  if (SongRequests <> nil) then
+    SongRequests.ClearNowPlaying;
+
   // close video files
   fVideoClip := nil;
   fCurrentVideo := nil;

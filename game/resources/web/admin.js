@@ -14,7 +14,7 @@ function show(id, visible) {
 function showLogin() {
   clearInterval(refreshTimer);
   show('tabs', false);
-  ['queueTab', 'usersTab', 'settingsTab'].forEach(id => show(id, false));
+  ['queueTab', 'usersTab', 'settingsTab', 'activityTab'].forEach(id => show(id, false));
   show('login', true);
   setTimeout(() => $('pin').focus(), 50);
 }
@@ -25,6 +25,7 @@ function setTab(tab) {
   show('queueTab', tab === 'queue');
   show('usersTab', tab === 'users');
   show('settingsTab', tab === 'settings');
+  show('activityTab', tab === 'activity');
 }
 
 async function queueAction(action, key) {
@@ -106,8 +107,51 @@ function renderUsers(users) {
           : button('🔇', t('mute'), () => userAction('mute', user.id, '15')),
         user.blocked
           ? button('✓', t('unblock'), () => userAction('unblock', user.id))
-          : button('⛔', t('block'), () => { if (confirm(t('confirm_block', user.nick || user.ip))) userAction('block', user.id); }, 'btn-danger')));
+          : button('⛔', t('block'), () => { if (confirm(t('confirm_block', user.nick || user.ip))) userAction('block', user.id); }, 'btn-danger'),
+        button('🗑', t('delete_user'), () => { if (confirm(t('confirm_delete', user.nick || user.ip))) userAction('delete', user.id); })));
   }));
+}
+
+function renderBlockedIps(ips) {
+  if (!ips.length) {
+    $('blockedIps').replaceChildren(t('no_blocked_ips'));
+    return;
+  }
+  $('blockedIps').replaceChildren(...ips.map(ip => el('div', { class: 'ip-row' },
+    el('span', { text: ip }),
+    button(t('unblock_ip'), t('unblock_ip'), async () => {
+      try { await api('/api/admin/ip', { action: 'unblock', ip }); refresh(); } catch (error) { handleError(error); }
+    }, 'btn-ghost'))));
+}
+
+function renderActivity(items) {
+  if (!items.length) {
+    $('activityRows').replaceChildren(el('tr', {}, el('td', { class: 'sub', text: t('no_activity') })));
+    return;
+  }
+  $('activityRows').replaceChildren(...items.map(item => {
+    const key = 'act_' + item.kind;
+    const text = TEXTS.es[key] ? t(key, item.who, item.detail) : `${item.kind} ${item.who} ${item.detail}`;
+    return el('tr', {},
+      el('td', { class: 'sub', style: 'white-space: nowrap', text: timeAgo(item.time) }),
+      el('td', { text }));
+  }));
+}
+
+function renderAdminNow(now) {
+  $('adminNow').classList.toggle('hidden', !now);
+  if (now) $('adminNow').textContent = '♪ ' + t('admin_now', `${now.artist} — ${now.title}`, now.players);
+}
+
+async function maintenance(action, question) {
+  if (!confirm(question)) return;
+  try {
+    await api('/api/admin/maintenance', { action });
+    toast(t('saved'), 'ok');
+    refresh();
+  } catch (error) {
+    handleError(error);
+  }
 }
 
 function renderSettings(s, force) {
@@ -130,6 +174,9 @@ async function refresh(forceSettings = false) {
     settings = data.settings;
     renderQueue(data.queue);
     renderUsers(data.users);
+    renderBlockedIps(data.blockedIps);
+    renderActivity(data.activity);
+    renderAdminNow(data.now);
     renderSettings(data.settings, forceSettings);
     if (!refreshTimer) refreshTimer = setInterval(() => refresh(), 5000);
   } catch (error) {
@@ -166,6 +213,8 @@ function start() {
   document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
   $('clearQueue').addEventListener('click', () => { if (confirm(t('confirm_clear'))) queueAction('clear', ''); });
+  $('resetStats').addEventListener('click', () => maintenance('reset_stats', t('confirm_reset_stats')));
+  $('clearActivity').addEventListener('click', () => maintenance('clear_activity', t('confirm_clear_activity')));
   $('pausedQuick').addEventListener('change', e => saveSettings({ ...settings, paused: e.target.checked }));
   $('settingsForm').addEventListener('submit', e => {
     e.preventDefault();
