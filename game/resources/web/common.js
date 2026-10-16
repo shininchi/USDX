@@ -39,7 +39,7 @@ const TEXTS = {
     // admin
     admin_title: 'Admin · Peticiones', admin_pin: 'PIN de administración', login: 'Entrar',
     err_wrong_pin: 'PIN incorrecto.', err_locked: 'Demasiados intentos. Espera unos minutos.',
-    votes_col: 'Votos',
+    votes_col: 'Votos', listen: 'Escuchar', stop_listening: 'Parar',
     tab_users: 'Usuarios', tab_settings: 'Ajustes', song: 'Canción', actions: 'Acciones',
     clear_queue: 'Vaciar cola', confirm_clear: '¿Vaciar toda la cola de peticiones?',
     mark_sung: 'Cantada', remove: 'Quitar', move_up: 'Subir', move_down: 'Bajar', pin: 'Fijar arriba', unpin: 'Desfijar',
@@ -85,7 +85,7 @@ const TEXTS = {
     err_network: 'Cannot reach the game.', err_generic: 'Something went wrong.',
     admin_title: 'Admin · Requests', admin_pin: 'Admin PIN', login: 'Log in',
     err_wrong_pin: 'Wrong PIN.', err_locked: 'Too many attempts. Wait a few minutes.',
-    votes_col: 'Votes',
+    votes_col: 'Votes', listen: 'Listen', stop_listening: 'Stop',
     tab_users: 'Users', tab_settings: 'Settings', song: 'Song', actions: 'Actions',
     clear_queue: 'Clear queue', confirm_clear: 'Clear the whole request queue?',
     mark_sung: 'Sung', remove: 'Remove', move_up: 'Up', move_down: 'Down', pin: 'Pin to top', unpin: 'Unpin',

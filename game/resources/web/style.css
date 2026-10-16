@@ -374,6 +374,7 @@ main { padding: 12px 14px 80px; }
 .detail .cover { max-width: 320px; margin: 0 auto 14px; border-radius: 14px; box-shadow: var(--shadow); }
 .detail h2 { margin: 0; font-size: 20px; }
 .detail .artist { color: var(--muted); margin-bottom: 8px; }
+.detail .listen { margin: 4px 0 10px; }
 .detail .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
 .detail .stat { background: var(--bg-3); border-radius: 10px; padding: 8px; text-align: center; }
 .detail .stat strong { display: block; font-size: 18px; }

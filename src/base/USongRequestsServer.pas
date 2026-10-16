@@ -199,6 +199,16 @@ begin
     Result := 'application/json'
   else if Ext = '.ico' then
     Result := 'image/x-icon'
+  else if Ext = '.mp3' then
+    Result := 'audio/mpeg'
+  else if Ext = '.ogg' then
+    Result := 'audio/ogg'
+  else if (Ext = '.m4a') or (Ext = '.aac') then
+    Result := 'audio/mp4'
+  else if Ext = '.mp4' then
+    Result := 'video/mp4'
+  else if Ext = '.webm' then
+    Result := 'video/webm'
   else
     Result := 'application/octet-stream';
 end;
@@ -263,6 +273,81 @@ begin
   AResponse.ContentStream := TFileStream.Create(FileName, fmOpenRead or fmShareDenyWrite);
   AResponse.FreeContentStream := true;
   AResponse.ContentLength := AResponse.ContentStream.Size;
+end;
+
+{* Sends a media file and honours "Range: bytes=a-b" requests, which browsers
+ * need to seek in audio and video (Safari does not play media without it).
+ * Open ranges are answered with a limited chunk to keep memory use low. *}
+procedure SendMediaFile(ARequest: TFPHTTPConnectionRequest; AResponse: TFPHTTPConnectionResponse;
+  const FileName: UTF8String);
+const
+  MAX_CHUNK = 2 * 1024 * 1024;
+var
+  Stream:     TFileStream;
+  Chunk:      TMemoryStream;
+  Size, First, Last: int64;
+  Range:      UTF8String;
+  Dash:       integer;
+begin
+  if (FileName = '') or not FileExists(FileName) then
+  begin
+    AResponse.Code := 404;
+    AResponse.Content := 'Not found';
+    Exit;
+  end;
+
+  Range := Trim(ARequest.GetCustomHeader('Range'));
+  if Pos('bytes=', Range) <> 1 then
+  begin
+    SendFile(AResponse, FileName, 'public, max-age=3600');
+    AResponse.SetCustomHeader('Accept-Ranges', 'bytes');
+    Exit;
+  end;
+
+  Stream := TFileStream.Create(FileName, fmOpenRead or fmShareDenyWrite);
+  try
+    Size := Stream.Size;
+    Range := Copy(Range, 7, MaxInt);
+    Dash := Pos('-', Range);
+    if Dash = 1 then
+    begin
+      // suffix range: the last N bytes
+      First := Size - StrToInt64Def(Copy(Range, 2, MaxInt), 0);
+      Last := Size - 1;
+    end
+    else
+    begin
+      First := StrToInt64Def(Copy(Range, 1, Dash - 1), 0);
+      Last := StrToInt64Def(Copy(Range, Dash + 1, MaxInt), -1);
+      if (Last < 0) or (Last >= Size) then
+        Last := Size - 1;
+    end;
+    if First < 0 then
+      First := 0;
+    if Last - First + 1 > MAX_CHUNK then
+      Last := First + MAX_CHUNK - 1;
+    if (Size = 0) or (First >= Size) or (Last < First) then
+    begin
+      AResponse.Code := 416;
+      AResponse.SetCustomHeader('Content-Range', 'bytes */' + IntToStr(Size));
+      Exit;
+    end;
+
+    Chunk := TMemoryStream.Create;
+    Stream.Position := First;
+    Chunk.CopyFrom(Stream, Last - First + 1);
+    Chunk.Position := 0;
+    AResponse.Code := 206;
+    AResponse.ContentType := ContentTypeFor(FileName);
+    AResponse.SetCustomHeader('Accept-Ranges', 'bytes');
+    AResponse.SetCustomHeader('Content-Range', Format('bytes %d-%d/%d', [First, Last, Size]));
+    AResponse.SetCustomHeader('Cache-Control', 'public, max-age=3600');
+    AResponse.ContentStream := Chunk;
+    AResponse.FreeContentStream := true;
+    AResponse.ContentLength := Chunk.Size;
+  finally
+    Stream.Free;
+  end;
 end;
 
 function ParseBody(ARequest: TFPHTTPConnectionRequest): TJSONObject;
@@ -466,6 +551,11 @@ begin
         Id := StrToIntDef(Copy(URLPath, Length('/api/cover/') + 1, MaxInt), -1);
         SendFile(AResponse, SongRequests.CoverFile(Id, ARequest.QueryFields.Values['full'] <> '1'),
           'public, max-age=86400');
+      end
+      else if (Pos('/api/audio/', URLPath) = 1) and (Method = 'GET') then
+      begin
+        Id := StrToIntDef(Copy(URLPath, Length('/api/audio/') + 1, MaxInt), -1);
+        SendMediaFile(ARequest, AResponse, SongRequests.AudioFile(Id));
       end
       else if (URLPath = '/api/queue') and (Method = 'GET') then
         SendJSON(AResponse, 200, SongRequests.QueueJSON(UserId))

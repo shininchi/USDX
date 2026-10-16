@@ -79,6 +79,12 @@ type
     Duet:      boolean;
     HasVideo:  boolean;
     CoverFile: UTF8String; // native path, empty if the song has no cover
+    AudioFile: UTF8String; // native path, empty if missing
+    VideoFile: UTF8String; // native path, empty if missing
+    VideoGap:  real;       // seconds the video is ahead of the audio
+    PreviewStart: real;    // seconds, -1 = not set in the song file
+    StartSec:  real;       // #START in seconds
+    FinishSec: real;       // #END in seconds, 0 = end of the audio
     Search:    UTF8String; // lower case ASCII "artist title" for searching
   end;
 
@@ -209,6 +215,7 @@ type
       function RequestSong(const UserId, IP: UTF8String; Id: integer): UTF8String;
       function WithdrawVote(const UserId: UTF8String; Id: integer): UTF8String;
       function CoverFile(Id: integer; Thumbnail: boolean): UTF8String;
+      function AudioFile(Id: integer): UTF8String;
 
       // admin API
       function AdminLogin(const IP, Pin: UTF8String; out Token: UTF8String): UTF8String;
@@ -749,6 +756,20 @@ begin
       if CoverPath.IsFile then
         fSongs[I].CoverFile := CoverPath.ToNative;
     end;
+    fSongs[I].AudioFile := '';
+    if not Song.Audio.IsUnset and Song.Path.Append(Song.Audio).IsFile then
+      fSongs[I].AudioFile := Song.Path.Append(Song.Audio).ToNative;
+    fSongs[I].VideoFile := '';
+    if not Song.Video.IsUnset and Song.Path.Append(Song.Video).IsFile then
+      fSongs[I].VideoFile := Song.Path.Append(Song.Video).ToNative;
+    fSongs[I].HasVideo := fSongs[I].VideoFile <> '';
+    fSongs[I].VideoGap := Song.VideoGAP;
+    if Song.HasPreview or (Song.PreviewStart > 0) then
+      fSongs[I].PreviewStart := Song.PreviewStart
+    else
+      fSongs[I].PreviewStart := -1;
+    fSongs[I].StartSec := Song.Start;
+    fSongs[I].FinishSec := Song.Finish / 1000;
     fSongs[I].Search := Song.ArtistASCII + ' ' + Song.TitleASCII;
     fKeyIndex.AddObject(fSongs[I].Key, TObject(PtrInt(I)));
   end;
@@ -1009,6 +1030,10 @@ begin
     Result.Add('duet', Duet);
     Result.Add('video', HasVideo);
     Result.Add('cover', CoverFile <> '');
+    Result.Add('audio', AudioFile <> '');
+    Result.Add('previewStart', PreviewStart);
+    Result.Add('start', StartSec);
+    Result.Add('finish', FinishSec);
   end;
   Result.Add('played', fStats[Index].TimesPlayed);
   Result.Add('best', fStats[Index].BestScore);
@@ -1662,6 +1687,18 @@ begin
     Result := Target
   else
     Result := Source;
+end;
+
+function TSongRequests.AudioFile(Id: integer): UTF8String;
+begin
+  Result := '';
+  fLock.Enter;
+  try
+    if (Id >= 0) and (Id <= High(fSongs)) then
+      Result := fSongs[Id].AudioFile;
+  finally
+    fLock.Leave;
+  end;
 end;
 
 { admin API }

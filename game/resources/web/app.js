@@ -159,6 +159,59 @@ function updateFiltersBadge() {
   $('filtersBadge').classList.toggle('hidden', count === 0);
 }
 
+// ---------- audio preview ----------
+
+const PREVIEW_SECONDS = 30;
+const preview = { audio: null, timer: null, fade: null, button: null };
+
+function stopPreview() {
+  clearTimeout(preview.timer);
+  clearInterval(preview.fade);
+  if (preview.audio) {
+    preview.audio.pause();
+    preview.audio.removeAttribute('src');
+    preview.audio.load();
+  }
+  if (preview.button) preview.button.textContent = `▶ ${t('listen')}`;
+  preview.audio = null;
+  preview.button = null;
+}
+
+// Same start point as the game: #PREVIEWSTART, or a quarter into the part
+// between #START and #END.
+function previewStart(song, duration) {
+  if (song.previewStart >= 0) return song.previewStart;
+  const start = song.start || 0;
+  const end = song.finish > 0 ? Math.min(song.finish, duration) : duration;
+  let offset = (end - start) / 4;
+  if (offset > 120) offset = 60;
+  return start + offset;
+}
+
+function togglePreview(song, button) {
+  if (preview.button === button) {
+    stopPreview();
+    return;
+  }
+  stopPreview();
+  const audio = new Audio(`/api/audio/${song.id}`);
+  preview.audio = audio;
+  preview.button = button;
+  button.textContent = `■ ${t('stop_listening')}`;
+  audio.addEventListener('loadedmetadata', () => {
+    audio.currentTime = previewStart(song, audio.duration || 0);
+    audio.play().catch(() => stopPreview());
+  }, { once: true });
+  audio.addEventListener('error', () => { if (preview.audio === audio) stopPreview(); });
+  // fade out at the end of the preview
+  preview.timer = setTimeout(() => {
+    preview.fade = setInterval(() => {
+      audio.volume = Math.max(0, audio.volume - 0.1);
+      if (audio.volume <= 0) stopPreview();
+    }, 200);
+  }, (PREVIEW_SECONDS - 2) * 1000);
+}
+
 // ---------- song detail ----------
 
 async function openSong(id) {
@@ -206,15 +259,21 @@ async function openSong(id) {
     row.append(el('button', { class: 'btn-primary', text: t('request'), onclick: () => act('/api/request', t('requested_ok')) }));
   }
 
+  const listen = song.audio
+    ? el('button', { class: 'btn-ghost listen', text: `▶ ${t('listen')}` })
+    : null;
+  if (listen) listen.addEventListener('click', () => togglePreview(song, listen));
+
   close = openSheet(el('div', { class: 'detail' },
     coverNode(song, true),
     el('h2', { text: song.title }),
     el('div', { class: 'artist', text: song.artist }),
+    listen,
     tags,
     stats,
     el('h3', { text: t('top_scores') }),
     scores,
-    row));
+    row), stopPreview);
 }
 
 // ---------- queue ----------
