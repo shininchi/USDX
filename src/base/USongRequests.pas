@@ -158,6 +158,7 @@ type
       fScoreFile:     IPath;
       fThumbDir:      IPath;
       fDirty:         boolean;
+      fVersion:       integer; // grows with every change of the state
       fLastSave:      TDateTime;
 
       // catalog snapshot
@@ -270,6 +271,7 @@ type
 
       property Config: TSongRequestsConfig read fConfig;
       property PendingCount: integer read GetPendingCount;
+      property Version: integer read fVersion;
   end;
 
 var
@@ -946,6 +948,7 @@ end;
 procedure TSongRequests.MarkDirty;
 begin
   fDirty := true;
+  Inc(fVersion);
 end;
 
 {* Appends to the activity log; the caller holds the lock. *}

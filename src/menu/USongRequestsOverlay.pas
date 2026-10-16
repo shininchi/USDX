@@ -71,7 +71,9 @@ uses
   USongs,
   UText,
   UThemes,
-  UCommon;
+  UCommon,
+  UPathUtils,
+  UPlaylist;
 
 const
   FADE_MS   = 250;
@@ -91,6 +93,7 @@ var
   LastSeenSeq: integer = -1; // NewRequestSeq that was already announced
   PulseStart:  cardinal;     // SDL ticks of the last new request
   LastJumpKey: UTF8String;   // song key of the last request jumped to
+  SyncedVersion: integer = -1; // SongRequests.Version of the "Requests" playlist
   NoticeText:  UTF8String;   // message shown below the song list
   BadgeLeft:   single;       // left edge of the badge, notices stay left of it
   NoticeStart: cardinal;
@@ -471,8 +474,65 @@ begin
   Renderer.DepthTest := DepthTest;
 end;
 
+{* Keeps a playlist with the requested songs in queue order, so the queue can
+ * also be browsed with the playlist menu (P). It is not changed while it is
+ * shown, so the selection does not jump; it catches up afterwards. *}
+procedure SyncPlaylist;
+var
+  Name:    UTF8String;
+  Idx, I, Target, N: integer;
+  Entries: TSRQueueEntries;
+  FileName: UTF8String;
+begin
+  if (SongRequests = nil) or not SongRequests.Config.Enabled or (PlayListMan = nil) or
+     (Songs = nil) or Songs.Processing or (Length(CatSongs.Song) = 0) or
+     (SongRequests.Version = SyncedVersion) then
+    Exit;
+
+  Name := Language.Translate('SONG_REQUESTS_PLAYLIST');
+  Idx := -1;
+  for I := 0 to High(PlayListMan.Playlists) do
+    if PlayListMan.Playlists[I].Name = Name then
+      Idx := I;
+
+  if (Idx >= 0) and (CatSongs.CatNumShow = -3) and (PlayListMan.CurPlayList = Idx) then
+    Exit;
+
+  if Idx < 0 then
+  begin
+    Idx := PlayListMan.AddPlaylist(Name);
+    // playlists are kept sorted, so the shown one may have moved
+    if (PlayListMan.CurPlayList >= Idx) then
+      PlayListMan.CurPlayList := PlayListMan.CurPlayList + 1;
+  end;
+
+  Entries := SongRequests.QueueSnapshot;
+  with PlayListMan.Playlists[Idx] do
+  begin
+    FixedOrder := true;
+    SetLength(Items, 0);
+    for I := 0 to High(Entries) do
+    begin
+      Target := FindCatSong(Entries[I].Key);
+      if Target < 0 then
+        Continue;
+      N := Length(Items);
+      SetLength(Items, N + 1);
+      Items[N].Artist := CatSongs.Song[Target].Artist;
+      Items[N].Title := CatSongs.Song[Target].Title;
+      Items[N].SongID := Target;
+    end;
+  end;
+  PlayListMan.SavePlayList(Idx);
+  // the file was written by us, it does not need to be read again
+  FileName := PlaylistPath.Append(PlayListMan.Playlists[Idx].Filename).ToNative;
+  PlayListMan.Playlists[Idx].LastRead := FileAge(FileName);
+  SyncedVersion := SongRequests.Version;
+end;
+
 procedure SongRequestsDrawOverlay;
 begin
+  SyncPlaylist;
   DrawBadge;
   DrawNotice;
   DrawQR;
