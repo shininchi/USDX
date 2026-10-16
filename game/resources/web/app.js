@@ -30,6 +30,7 @@ async function loadInfo() {
   applyAccent(state.info.accent);
   $('nickChip').replaceChildren('👤', el('span', { class: 'chip-text', text: state.info.me.nick || t('change_nick') }));
   fitHeader();
+  reportDevice();
   $('pausedNotice').classList.toggle('hidden', !state.info.paused);
   return state.info;
 }
@@ -57,6 +58,28 @@ function toggleAutoplay() {
   storageSet('sr.autoplay', state.autoplay ? '1' : '0');
   renderAutoplay();
   toast(t(state.autoplay ? 'autoplay_on' : 'autoplay_off'));
+}
+
+// Tells the admin page which device a guest uses. Chrome on Android shares
+// the model through client hints; iPads present themselves as Macs and are
+// recognised by their touch screen.
+let deviceReported = false;
+async function reportDevice() {
+  if (deviceReported || !state.info || !state.info.me.nick) return;
+  deviceReported = true;
+  let model = '';
+  try {
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+      const hints = await navigator.userAgentData.getHighEntropyValues(['model', 'platformVersion']);
+      model = hints.model || '';
+      // Chrome always says "Android 10" in the user agent; the real version
+      // travels with the model as "Pixel 8|14"
+      if (model && navigator.userAgentData.platform === 'Android' && hints.platformVersion)
+        model += '|' + hints.platformVersion.split('.')[0];
+    }
+  } catch (e) { /* not available */ }
+  if (!model && /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1) model = 'iPad';
+  if (model) api('/api/device', { model }).catch(() => {});
 }
 
 function fillSelect(select, values, emptyLabel, extra = []) {

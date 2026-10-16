@@ -78,6 +78,36 @@ function renderQueue(queue) {
       button('✕', t('remove'), () => queueAction('remove', item.key), 'btn-danger')))));
 }
 
+// Readable device name from the user agent, e.g. "📱 Pixel 8 · Android 14 · Chrome"
+function deviceLabel(ua, model) {
+  ua = ua || '';
+  let icon = '💻', system = '';
+  let androidVersion = '';
+  if (model && model.includes('|')) [model, androidVersion] = model.split('|');
+  const android = ua.match(/Android (\d+(?:\.\d+)?)/);
+  if (/iPad/.test(ua) || model === 'iPad') { icon = '📲'; system = 'iPad'; }
+  else if (/iPhone/.test(ua)) { icon = '📱'; system = 'iPhone'; }
+  else if (android) {
+    icon = /Mobile/.test(ua) ? '📱' : '📲';
+    system = `Android ${androidVersion || android[1]}`;
+    // older user agents still carry the model: "Android 10; SM-G973F"
+    const fromUa = ua.match(/Android [\d.]+; ([^;)]+)\)/);
+    if (!model && fromUa && fromUa[1] !== 'K') model = fromUa[1].trim();
+  }
+  else if (/Windows/.test(ua)) system = 'Windows';
+  else if (/Macintosh/.test(ua)) system = 'Mac';
+  else if (/Linux|X11|CrOS/.test(ua)) system = /CrOS/.test(ua) ? 'ChromeOS' : 'Linux';
+  let browser = '';
+  if (/SamsungBrowser/.test(ua)) browser = 'Samsung Internet';
+  else if (/Edg(e|A|iOS)?\//.test(ua)) browser = 'Edge';
+  else if (/Firefox|FxiOS/.test(ua)) browser = 'Firefox';
+  else if (/OPR\/|Opera/.test(ua)) browser = 'Opera';
+  else if (/Chrome|CriOS/.test(ua)) browser = 'Chrome';
+  else if (/Safari/.test(ua)) browser = 'Safari';
+  const parts = [model && model !== 'iPad' ? model : '', system, browser].filter(Boolean);
+  return parts.length ? `${icon} ${parts.join(' · ')}` : '—';
+}
+
 function renderUsers(users) {
   users.sort((a, b) => b.seen - a.seen);
   $('usersBadge').textContent = users.length;
@@ -94,6 +124,7 @@ function renderUsers(users) {
     return el('tr', {},
       el('td', {},
         el('div', { text: user.nick || '—' }),
+        el('div', { class: 'device', title: user.ua || '', text: deviceLabel(user.ua, user.model) }),
         el('div', { class: 'sub', text: `${user.ip} · ${timeAgo(user.seen)}` })),
       el('td', {}, `${user.pending} / ${user.requests}`),
       el('td', {}, status),

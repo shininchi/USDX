@@ -549,6 +549,10 @@ begin
       if Method = 'POST' then
         Body := ParseBody(ARequest);
 
+      // remember which device each guest uses (shown in the admin page)
+      if Pos('/api/admin/', URLPath) <> 1 then
+        SongRequests.TouchUser(UserId, IP, ARequest.UserAgent);
+
       // guest API
       if (URLPath = '/api/info') and (Method = 'GET') then
         SendJSON(AResponse, 200, SongRequests.InfoJSON(UserId))
@@ -606,6 +610,11 @@ begin
         SendJSON(AResponse, 200, SongRequests.QueueJSON(UserId))
       else if (URLPath = '/api/request') and (Method = 'POST') then
         SendResult(AResponse, SongRequests.RequestSong(UserId, IP, BodyInt('id')))
+      else if (URLPath = '/api/device') and (Method = 'POST') then
+      begin
+        SongRequests.SetDeviceModel(UserId, BodyStr('model'));
+        SendResult(AResponse, '');
+      end
       else if (URLPath = '/api/unvote') and (Method = 'POST') then
         SendResult(AResponse, SongRequests.WithdrawVote(UserId, BodyInt('id')))
 

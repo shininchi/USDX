@@ -501,6 +501,7 @@ main { padding: 12px 14px 80px; }
 .admin-table td.actions { white-space: nowrap; text-align: right; }
 .admin-table td.actions button { padding: 6px 9px; margin-left: 2px; }
 .admin-table .sub { color: var(--muted); font-size: 12px; }
+.admin-table .device { font-size: 12px; color: var(--text); opacity: .85; margin-top: 2px; }
 .status-blocked { color: var(--danger); font-weight: 600; }
 .status-muted { color: var(--warn); font-weight: 600; }
 .status-ok { color: var(--ok); }

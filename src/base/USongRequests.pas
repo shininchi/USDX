@@ -151,6 +151,8 @@ type
     MutedUntil:    TDateTime;
     TotalRequests: integer;
     Blocked:       boolean;
+    UserAgent:     UTF8String; // of the last request, to tell devices apart
+    Model:         UTF8String; // device model reported by the browser, if any
   end;
 
   TSongRequests = class
@@ -247,6 +249,9 @@ type
       function IsIPBlocked(const IP: UTF8String): boolean;
       function InfoJSON(const UserId: UTF8String): UTF8String;
       function SetNick(const UserId, IP, Nick: UTF8String): UTF8String;
+      {* Records the browser of a known guest on each request. *}
+      procedure TouchUser(const UserId, IP, UserAgent: UTF8String);
+      procedure SetDeviceModel(const UserId, Model: UTF8String);
       function SearchJSON(const Params: TSRSearchParams; const UserId: UTF8String): UTF8String;
       function SongJSON(Id: integer; const UserId: UTF8String): UTF8String;
       function QueueJSON(const UserId: UTF8String): UTF8String;
@@ -823,6 +828,8 @@ begin
         User.MutedUntil := UnixToDateTime(O.Get('mutedUntil', int64(0)));
         User.TotalRequests := O.Get('requests', 0);
         User.Blocked := O.Get('blocked', false);
+        User.UserAgent := O.Get('ua', '');
+        User.Model := O.Get('model', '');
         if User.Id <> '' then
           fUsers.Add(User)
         else
@@ -948,6 +955,8 @@ begin
       O.Add('mutedUntil', DateTimeToUnix(User.MutedUntil));
       O.Add('requests', User.TotalRequests);
       O.Add('blocked', User.Blocked);
+      O.Add('ua', User.UserAgent);
+      O.Add('model', User.Model);
       Arr.Add(O);
     end;
     Root.Add('users', Arr);
@@ -1599,6 +1608,8 @@ begin
   Result.Add('nick', User.Nick);
   Result.Add('ip', User.LastIP);
   Result.Add('created', DateTimeToUnix(User.CreatedAt));
+  Result.Add('ua', User.UserAgent);
+  Result.Add('model', User.Model);
   Result.Add('seen', DateTimeToUnix(User.LastSeen));
   Result.Add('requests', User.TotalRequests);
   Result.Add('pending', PendingOfUser(User.Id));
@@ -1746,6 +1757,57 @@ begin
     User.LastSeen := NowUTC;
     MarkDirty;
     Result := '';
+  finally
+    fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.TouchUser(const UserId, IP, UserAgent: UTF8String);
+var
+  User: TSRUser;
+begin
+  fLock.Enter;
+  try
+    User := FindUser(UserId);
+    if User = nil then
+      Exit;
+    // seen is only stored when something else changes, to avoid writing the
+    // state file on every poll
+    User.LastSeen := NowUTC;
+    if (UserAgent <> '') and (User.UserAgent <> UserAgent) then
+    begin
+      User.UserAgent := Copy(UserAgent, 1, 400);
+      MarkDirty;
+    end;
+    if (IP <> '') and (User.LastIP <> IP) then
+    begin
+      User.LastIP := IP;
+      MarkDirty;
+    end;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.SetDeviceModel(const UserId, Model: UTF8String);
+var
+  User:  TSRUser;
+  Clean: UTF8String;
+  I:     integer;
+begin
+  Clean := '';
+  for I := 1 to Min(Length(Model), 60) do
+    if Model[I] >= ' ' then
+      Clean := Clean + Model[I];
+  Clean := Trim(Clean);
+  fLock.Enter;
+  try
+    User := FindUser(UserId);
+    if (User <> nil) and (User.Model <> Clean) then
+    begin
+      User.Model := Clean;
+      MarkDirty;
+    end;
   finally
     fLock.Leave;
   end;
