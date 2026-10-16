@@ -310,7 +310,7 @@ const
   SAVE_INTERVAL_SEC  = 2;
   STATS_INTERVAL_SEC = 60;
   MAX_ACTIVITY       = 300;
-  CLIP_SECONDS       = 10;
+  CLIP_SECONDS       = 30; // as long as the audio preview of the web client
   CLIP_HEIGHT        = 360;
   THUMB_SIZE         = 240;
   MAX_NICK_LENGTH    = 24;
@@ -441,6 +441,18 @@ begin
     Result := Info.Size;
     FindClose(Info);
   end;
+end;
+
+{* Song position (audio time, in seconds) where the preview clip starts. The
+ * web client starts the audio preview there too, so both match. *}
+function ClipStartOf(const Song: TSRSong): double;
+begin
+  if Song.PreviewStart >= 0 then
+    Result := Song.PreviewStart
+  else if Song.FinishSec > Song.StartSec then
+    Result := Song.StartSec + Min(60, (Song.FinishSec - Song.StartSec) / 4)
+  else
+    Result := Song.StartSec + 45;
 end;
 
 { TSRClipWorker }
@@ -1329,6 +1341,7 @@ begin
     Result.Add('cover', CoverFile <> '');
     Result.Add('audio', AudioFile <> '');
     Result.Add('clip', (VideoFile <> '') and (fFFmpeg <> ''));
+    Result.Add('clipStart', ClipStartOf(fSongs[Index]));
     Result.Add('previewStart', PreviewStart);
     Result.Add('start', StartSec);
     Result.Add('finish', FinishSec);
@@ -2036,7 +2049,8 @@ begin
     if (fFFmpeg = '') or (Id < 0) or (Id > High(fSongs)) or (fSongs[Id].VideoFile = '') then
       Exit;
     Song := fSongs[Id];
-    Target := fClipDir.Append(Format('%.8x.mp4', [HashString(Song.Key + '|' + Song.VideoFile)])).ToNative;
+    Target := fClipDir.Append(Format('%.8x-%d.mp4',
+      [HashString(Song.Key + '|' + Song.VideoFile), CLIP_SECONDS])).ToNative;
 
     if FileExists(Target) then
     begin
@@ -2051,15 +2065,8 @@ begin
     if fClipJobs.IndexOfName(Target) >= 0 then
       Exit;
 
-    // the clip starts where the audio preview starts; the video runs
-    // VideoGap seconds ahead of the audio
-    if Song.PreviewStart >= 0 then
-      Start := Song.PreviewStart
-    else if Song.FinishSec > Song.StartSec then
-      Start := Song.StartSec + Min(60, (Song.FinishSec - Song.StartSec) / 4)
-    else
-      Start := Song.StartSec + 45;
-    Start := Max(0, Start + Song.VideoGap);
+    // the video runs VideoGap seconds ahead of the audio
+    Start := Max(0, ClipStartOf(Song) + Song.VideoGap);
     // the newest request goes first, older ones may belong to closed pages
     fClipJobs.Insert(0, Target + '=' + Song.VideoFile + '|' + FloatToStr(Start, DefaultFormatSettings));
   finally

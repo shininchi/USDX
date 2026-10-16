@@ -162,7 +162,7 @@ function updateFiltersBadge() {
 // ---------- audio preview ----------
 
 const PREVIEW_SECONDS = 30;
-const preview = { audio: null, timer: null, fade: null, button: null };
+const preview = { audio: null, timer: null, fade: null, button: null, video: null };
 
 function stopPreview() {
   clearTimeout(preview.timer);
@@ -173,13 +173,32 @@ function stopPreview() {
     preview.audio.load();
   }
   if (preview.button) preview.button.textContent = `▶ ${t('listen')}`;
+  if (preview.video) preview.video.loop = true; // back to the silent loop
   preview.audio = null;
   preview.button = null;
+  preview.video = null;
+}
+
+// Keeps the preview clip at the same moment as the audio. The clip starts
+// at song.clipStart (audio time), so its position is the audio position
+// minus that.
+function syncVideo(song, button) {
+  const audio = preview.audio;
+  const video = button.closest('.detail')?.querySelector('.cover-video');
+  if (!audio || !video || video.readyState < 1) return;
+  preview.video = video;
+  video.loop = false;
+  const target = audio.currentTime - song.clipStart;
+  if (target < 0 || target > (video.duration || 0)) return;
+  if (Math.abs(video.currentTime - target) > 0.35) video.currentTime = target;
+  if (video.paused) video.play().catch(() => {});
 }
 
 // Same start point as the game: #PREVIEWSTART, or a quarter into the part
 // between #START and #END.
 function previewStart(song, duration) {
+  // with a video clip the audio starts where the clip starts
+  if (song.clip && song.clipStart >= 0) return song.clipStart;
   if (song.previewStart >= 0) return song.previewStart;
   const start = song.start || 0;
   const end = song.finish > 0 ? Math.min(song.finish, duration) : duration;
@@ -221,6 +240,7 @@ function togglePreview(song, button) {
     }, { once: true });
     audio.currentTime = previewStart(song, audio.duration || 0);
   }, { once: true });
+  if (song.clip) audio.addEventListener('timeupdate', () => { if (preview.audio === audio) syncVideo(song, button); });
   audio.addEventListener('error', () => {
     if (preview.audio !== audio) return;
     console.warn('Audio preview error:', audio.error && audio.error.code);
