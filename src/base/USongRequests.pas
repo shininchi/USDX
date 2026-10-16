@@ -213,6 +213,8 @@ type
       procedure ClipDone(const Target: UTF8String; Success: boolean);
       procedure UpdateIcons;
       procedure LoadConfig;
+      procedure WriteConfig;
+      function GetSettings: TSongRequestsSettings;
       procedure LoadState;
       procedure SaveState;
       procedure MarkDirty;
@@ -290,7 +292,14 @@ type
        * and the description of the latest one. *}
       function NewRequestSeq(out Text: UTF8String): integer;
 
+      {* Changes the options that work without restarting the server
+       * (AllowRemote, QRTimeout, AdminPin) and saves all to config.ini.
+       * Enabled and Port are only saved, see RestartSongRequests. *}
+      procedure ChangeConfig(const NewConfig: TSongRequestsConfig);
+      procedure ChangeSettings(const NewSettings: TSongRequestsSettings);
+
       property Config: TSongRequestsConfig read fConfig;
+      property Settings: TSongRequestsSettings read GetSettings;
       property PendingCount: integer read GetPendingCount;
       property Version: integer read fVersion;
       property GameNick: UTF8String read fGameNick write fGameNick;
@@ -717,7 +726,6 @@ end;
 procedure TSongRequests.LoadConfig;
 var
   IniFile: TMemIniFile;
-  Writer:  TIniFile;
   Missing: boolean;
 begin
   IniFile := TMemIniFile.Create(Ini.Filename.ToNative);
@@ -745,23 +753,80 @@ begin
   begin
     if fConfig.AdminPin = '' then
       fConfig.AdminPin := Format('%.6d', [Random(1000000)]);
-    Writer := TIniFile.Create(Ini.Filename.ToNative);
-    try
-      if fConfig.Enabled then
-        Writer.WriteString(INI_SECTION, 'Enabled', 'On')
-      else
-        Writer.WriteString(INI_SECTION, 'Enabled', 'Off');
-      Writer.WriteInteger(INI_SECTION, 'Port', fConfig.Port);
-      Writer.WriteString(INI_SECTION, 'Host', fConfig.Host);
-      if fConfig.AllowRemote then
-        Writer.WriteString(INI_SECTION, 'AllowRemote', 'On')
-      else
-        Writer.WriteString(INI_SECTION, 'AllowRemote', 'Off');
-      Writer.WriteInteger(INI_SECTION, 'QRTimeout', fConfig.QRTimeout);
-      Writer.WriteString(INI_SECTION, 'AdminPin', fConfig.AdminPin);
-    finally
-      Writer.Free;
-    end;
+    WriteConfig;
+  end;
+end;
+
+procedure TSongRequests.WriteConfig;
+var
+  Writer: TIniFile;
+
+  procedure WriteSwitch(const Key: string; Value: boolean);
+  begin
+    if Value then
+      Writer.WriteString(INI_SECTION, Key, 'On')
+    else
+      Writer.WriteString(INI_SECTION, Key, 'Off');
+  end;
+
+begin
+  Writer := TIniFile.Create(Ini.Filename.ToNative);
+  try
+    WriteSwitch('Enabled', fConfig.Enabled);
+    Writer.WriteInteger(INI_SECTION, 'Port', fConfig.Port);
+    Writer.WriteString(INI_SECTION, 'Host', fConfig.Host);
+    WriteSwitch('AllowRemote', fConfig.AllowRemote);
+    Writer.WriteInteger(INI_SECTION, 'QRTimeout', fConfig.QRTimeout);
+    Writer.WriteString(INI_SECTION, 'AdminPin', fConfig.AdminPin);
+  finally
+    Writer.Free;
+  end;
+end;
+
+procedure TSongRequests.ChangeConfig(const NewConfig: TSongRequestsConfig);
+var
+  PinChanged: boolean;
+begin
+  fLock.Enter;
+  try
+    PinChanged := NewConfig.AdminPin <> fConfig.AdminPin;
+    fConfig.Enabled := NewConfig.Enabled;
+    if (NewConfig.Port > 0) and (NewConfig.Port <= 65535) then
+      fConfig.Port := NewConfig.Port;
+    fConfig.AllowRemote := NewConfig.AllowRemote;
+    fConfig.QRTimeout := Max(0, NewConfig.QRTimeout);
+    if NewConfig.AdminPin <> '' then
+      fConfig.AdminPin := NewConfig.AdminPin;
+    // whoever logged in with the old PIN has to log in again
+    if PinChanged then
+      fAdminSessions.Clear;
+    WriteConfig;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.GetSettings: TSongRequestsSettings;
+begin
+  fLock.Enter;
+  try
+    Result := fSettings;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.ChangeSettings(const NewSettings: TSongRequestsSettings);
+begin
+  fLock.Enter;
+  try
+    fSettings.Paused := NewSettings.Paused;
+    fSettings.MaxPendingPerUser := Max(0, NewSettings.MaxPendingPerUser);
+    fSettings.CooldownSeconds := Max(0, NewSettings.CooldownSeconds);
+    fSettings.RecentMinutes := Max(0, NewSettings.RecentMinutes);
+    MarkDirty;
+  finally
+    fLock.Leave;
   end;
 end;
 

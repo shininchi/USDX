@@ -62,6 +62,7 @@ uses
   UScreenOptionsNetwork,
   UScreenOptionsWebcam,
   UScreenOptionsJukebox,
+  UScreenOptionsSongRequests,
   UScreenSong,
   UScreenSingController,
   UScreenJukebox,
@@ -159,6 +160,7 @@ var
   ScreenOptionsNetwork:   TScreenOptionsNetwork;
   ScreenOptionsWebcam:    TScreenOptionsWebcam;
   ScreenOptionsJukebox:   TScreenOptionsJukebox;
+  ScreenOptionsSongRequests: TScreenOptionsSongRequests;
   ScreenEditSub:      TScreenEditSub;
   ScreenEdit:         TScreenEdit;
   ScreenEditConvert:  TScreenEditConvert;
@@ -1047,6 +1049,8 @@ begin
   ScreenOptionsWebcam  :=    TScreenOptionsWebcam.Create;
   SetLoadingTitle('Loading ScreenOptionsJukebox');
   ScreenOptionsJukebox :=    TScreenOptionsJukebox.Create;
+  SetLoadingTitle('Loading ScreenOptionsSongRequests');
+  ScreenOptionsSongRequests := TScreenOptionsSongRequests.Create;
   SetLoadingTitle('Loading ScreenEditConvert & ScreenEditSub & ScreenEdit');
   ScreenEditConvert :=      TScreenEditConvert.Create;
   ScreenEditSub :=          TScreenEditSub.Create;
@@ -1112,6 +1116,7 @@ begin
   FreeAndNil(ScreenOptionsNetwork);
   FreeAndNil(ScreenOptionsWebcam);
   FreeAndNil(ScreenOptionsJukebox);
+  FreeAndNil(ScreenOptionsSongRequests);
   FreeAndNil(ScreenEditSub);
   FreeAndNil(ScreenEdit);
   FreeAndNil(ScreenEditConvert);

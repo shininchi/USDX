@@ -58,6 +58,7 @@ type
       ButtonNetworkIID,
       ButtonWebcamIID,
       ButtonJukeboxIID,
+      ButtonSongRequestsIID,
       ButtonExitIID: cardinal;
 
       MapIIDtoDescID: array of integer;
@@ -175,6 +176,12 @@ begin
           Exit;
         end;
 
+      SDLK_C:
+        begin
+          FadeTo(@ScreenOptionsSongRequests, SoundLib.Start);
+          Exit;
+        end;
+
       SDLK_Q:
         begin
           Result := false;
@@ -274,6 +281,12 @@ begin
               ScreenPopupError.ShowPopup(Language.Translate('ERROR_NO_SONGS'));
           end;
 
+          if Interaction = ButtonSongRequestsIID then
+          begin
+            AudioPlayback.PlaySound(SoundLib.Start);
+            FadeTo(@ScreenOptionsSongRequests);
+          end;
+
           if Interaction = ButtonExitIID then
           begin
             Ini.Save;
@@ -331,6 +344,7 @@ begin
 
   AddButtonChecked(Theme.Options.ButtonWebcam, OPTIONS_DESC_INDEX_WEBCAM,  ButtonWebcamIID);
   AddButtonChecked(Theme.Options.ButtonJukebox, OPTIONS_DESC_INDEX_JUKEBOX,  ButtonJukeboxIID);
+  AddButtonChecked(Theme.Options.ButtonSongRequests, OPTIONS_DESC_INDEX_SONGREQUESTS,  ButtonSongRequestsIID);
 
   AddButtonChecked(Theme.Options.ButtonExit, OPTIONS_DESC_INDEX_BACK,  ButtonExitIID);
 

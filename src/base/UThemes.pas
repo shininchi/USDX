@@ -79,6 +79,7 @@ const
   OPTIONS_DESC_INDEX_WEBCAM    = 9;
   OPTIONS_DESC_INDEX_JUKEBOX   = 10;
   OPTIONS_DESC_INDEX_INPUT     = 11;
+  OPTIONS_DESC_INDEX_SONGREQUESTS = 12;
 
 
 type
@@ -687,10 +688,11 @@ type
     ButtonNetwork:    TThemeButton;
     ButtonWebcam:     TThemeButton;
     ButtonJukebox:    TThemeButton;
+    ButtonSongRequests: TThemeButton;
     ButtonExit:       TThemeButton;
 
     TextDescription:      TThemeText;
-    Description:          array[0..11] of UTF8String;
+    Description:          array[0..12] of UTF8String;
   end;
 
   TThemeScrollBar = record
@@ -1793,6 +1795,7 @@ begin
       ThemeLoadButton(Options.ButtonNetwork,  'OptionsButtonNetwork');
       ThemeLoadButton(Options.ButtonWebcam,   'OptionsButtonWebcam');
       ThemeLoadButton(Options.ButtonJukebox,  'OptionsButtonJukebox');
+      ThemeLoadButton(Options.ButtonSongRequests, 'OptionsButtonSongRequests');
       ThemeLoadButton(Options.ButtonExit,     'OptionsButtonExit');
 
       // Note: always update the indexes constant on top of this unit when changing the order (see OPTIONS_DESC_INDEX_*)
@@ -1808,6 +1811,7 @@ begin
       Options.Description[OPTIONS_DESC_INDEX_NETWORK] := Language.Translate('SING_OPTIONS_NETWORK_DESC');
       Options.Description[OPTIONS_DESC_INDEX_WEBCAM] := Language.Translate('SING_OPTIONS_WEBCAM_DESC');
       Options.Description[OPTIONS_DESC_INDEX_JUKEBOX] := Language.Translate('SING_OPTIONS_JUKEBOX_DESC');
+      Options.Description[OPTIONS_DESC_INDEX_SONGREQUESTS] := Language.Translate('SING_OPTIONS_SONGREQUESTS_DESC');
 
       ThemeLoadText(Options.TextDescription, 'OptionsTextDescription');
       Options.TextDescription.Text := Options.Description[OPTIONS_DESC_INDEX_GAME]; // Select default first menu button 'Game'

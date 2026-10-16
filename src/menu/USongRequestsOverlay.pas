@@ -56,6 +56,9 @@ procedure SongRequestsJump(RandomPick: boolean);
 {* Shows a message at the bottom center of the song selection screen. *}
 procedure SongRequestsShowNotice(const Text: UTF8String);
 
+{* Forgets what was seen of the request list, after RestartSongRequests. *}
+procedure SongRequestsResetOverlay;
+
 implementation
 
 uses
@@ -144,6 +147,14 @@ procedure SongRequestsHideQR;
 begin
   Visible := false;
   HiddenAt := 0;
+end;
+
+procedure SongRequestsResetOverlay;
+begin
+  Visible := false;
+  LastSeenSeq := -1;
+  SyncedVersion := -1;
+  LastJumpKey := '';
 end;
 
 procedure StartHiding;

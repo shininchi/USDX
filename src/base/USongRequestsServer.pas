@@ -62,6 +62,9 @@ type
 
 procedure StartSongRequests;
 procedure StopSongRequests;
+{* Starts again with the options in config.ini, e.g. after switching the
+ * server on or off or changing its port in the options screen. *}
+procedure RestartSongRequests;
 function SongRequestsURL: UTF8String;
 
 implementation
@@ -108,6 +111,12 @@ begin
     FreeAndNil(Server);
   end;
   FreeAndNil(SongRequests);
+end;
+
+procedure RestartSongRequests;
+begin
+  StopSongRequests;
+  StartSongRequests;
 end;
 
 function SongRequestsURL: UTF8String;

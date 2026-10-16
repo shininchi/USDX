@@ -321,6 +321,7 @@ uses
   UScreenOptionsNetwork   in 'screens\UScreenOptionsNetwork.pas',
   UScreenOptionsWebcam    in 'screens\UScreenOptionsWebcam.pas',
   UScreenOptionsJukebox   in 'screens\UScreenOptionsJukebox.pas',
+  UScreenOptionsSongRequests in 'screens\UScreenOptionsSongRequests.pas',
   UScreenEditSub          in 'screens\UScreenEditSub.pas',
   UScreenEdit             in 'screens\UScreenEdit.pas',
   UScreenEditConvert      in 'screens\UScreenEditConvert.pas',
