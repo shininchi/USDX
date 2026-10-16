@@ -532,9 +532,11 @@ async function start() {
   refreshQueue();
   if (!state.info.me.nick) askNick();
 
-  setInterval(refreshQueue, 10000);
+  // poll often while the page is visible, not at all in the background
+  setInterval(() => { if (!document.hidden) refreshQueue(); }, 4000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshQueue(); });
   setInterval(updateNowProgress, 1000);
-  setInterval(() => loadInfo().catch(() => {}), 30000);
+  setInterval(() => { if (!document.hidden) loadInfo().catch(() => {}); }, 30000);
 }
 
 start();
