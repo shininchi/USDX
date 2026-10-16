@@ -70,6 +70,8 @@ input:focus, select:focus { border-color: var(--accent-2); }
 header.top {
   position: sticky;
   top: 0;
+  /* full screen web app on iPhone: keep clear of the status bar */
+  padding-top: env(safe-area-inset-top);
   z-index: 10;
   background: rgba(15, 16, 32, .92);
   backdrop-filter: blur(10px);

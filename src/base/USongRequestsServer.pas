@@ -206,6 +206,8 @@ begin
     Result := 'image/jpeg'
   else if Ext = '.json' then
     Result := 'application/json'
+  else if Ext = '.webmanifest' then
+    Result := 'application/manifest+json'
   else if Ext = '.ico' then
     Result := 'image/x-icon'
   else if Ext = '.mp3' then
