@@ -233,7 +233,7 @@ function magnifyIndex(y) {
   }
   const bubble = $('azBubble');
   const barRect = bar.getBoundingClientRect();
-  bubble.style.left = `${barRect.left - 165}px`; // clear of the magnified letters
+  bubble.style.left = `${barRect.right - 22 - 165}px`; // clear of the magnified letters
   bubble.style.top = `${Math.min(Math.max(y, barRect.top + 30), barRect.bottom - 30)}px`;
   bubble.classList.remove('hidden');
 }
