@@ -71,8 +71,9 @@ uses
   UText;
 
 const
-  FADE_MS  = 250;
-  PULSE_MS = 1500;
+  FADE_MS   = 250;
+  PULSE_MS  = 1500;
+  NOTICE_MS = 4000;
 
 var
   Visible:   boolean;
@@ -85,6 +86,8 @@ var
   LastSeenSeq: integer = -1; // NewRequestSeq that was already announced
   PulseStart:  cardinal;     // SDL ticks of the last new request
   LastJumpKey: UTF8String;   // song key of the last request jumped to
+  NoticeText:  UTF8String;   // message shown below the song list
+  NoticeStart: cardinal;
 
 function OverlayAllowed: boolean;
 begin
@@ -262,6 +265,14 @@ begin
   Renderer.DepthTest := DepthTest;
 end;
 
+{* Shows a message at the bottom center of the song selection screen. The
+ * theme's message box is not used because it covers the song cover. *}
+procedure ShowNotice(const Text: UTF8String);
+begin
+  NoticeText := Text;
+  NoticeStart := SDL_GetTicks;
+end;
+
 function FindCatSong(const Key: UTF8String): integer;
 var
   I: integer;
@@ -331,13 +342,13 @@ begin
     By := Entry.By;
     if Length(By) > 30 then
       By := Copy(By, 1, 27) + '...';
-    ScreenSong.WriteMessage(Format('%s %d/%d: %s - %s (%s)',
+    ShowNotice(Format('%s %d/%d: %s - %s (%s)',
       [Language.Translate('SONG_REQUESTS_REQUEST'), J + 1, Length(Entries),
        Entry.Artist, Entry.Title, By]));
     Exit;
   end;
 
-  ScreenSong.WriteMessage(Language.Translate('SONG_REQUESTS_EMPTY'));
+  ShowNotice(Language.Translate('SONG_REQUESTS_EMPTY'));
 end;
 
 procedure DrawBadge;
@@ -363,7 +374,7 @@ begin
   begin
     LastSeenSeq := Seq;
     PulseStart := Ticks;
-    ScreenSong.WriteMessage(Language.Translate('SONG_REQUESTS_NEW') + ': ' + NewText);
+    ShowNotice(Language.Translate('SONG_REQUESTS_NEW') + ': ' + NewText);
   end;
 
   Count := SongRequests.PendingCount;
@@ -406,9 +417,49 @@ begin
   Renderer.DepthTest := DepthTest;
 end;
 
+procedure DrawNotice;
+var
+  Ticks:     cardinal;
+  Alpha:     single;
+  W, H, X, Y: single;
+  DepthTest: boolean;
+begin
+  if (NoticeText = '') or (Display.NextScreen <> nil) or (Display.CurrentScreen <> @ScreenSong) then
+    Exit;
+
+  Ticks := SDL_GetTicks;
+  if Ticks - NoticeStart >= NOTICE_MS then
+  begin
+    NoticeText := '';
+    Exit;
+  end;
+  Alpha := Min(1, Min((Ticks - NoticeStart) / FADE_MS, (NOTICE_MS - (Ticks - NoticeStart)) / (2 * FADE_MS)));
+
+  SetFontFamily(0);
+  SetFontStyle(ftBold);
+  SetFontItalic(false);
+  SetFontSize(20);
+
+  W := Min(TextWidth(NoticeText) + 32, RenderW - 40);
+  H := 32;
+  X := (RenderW - W) / 2;
+  Y := RenderH - H - 54; // above the row of the badge
+
+  DepthTest := Renderer.DepthTest;
+  Renderer.DepthTest := false;
+  Renderer.DrawQuad(X, Y, 0, W, H, 0.05, 0.05, 0.1, 0.9 * Alpha);
+  Renderer.DrawQuad(X, Y + H - 3, 0, W, 3, 1, 0.31, 0.64, Alpha);
+
+  SetFontColor(1, 1, 1, Alpha);
+  SetFontPos(X + 16, Y + 5);
+  PrintText(NoticeText);
+  Renderer.DepthTest := DepthTest;
+end;
+
 procedure SongRequestsDrawOverlay;
 begin
   DrawBadge;
+  DrawNotice;
   DrawQR;
 end;
 
