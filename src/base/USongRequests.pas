@@ -1550,9 +1550,18 @@ begin
   if Sort = 'title' then
     Result := CompareText(fSongs[A].Title, fSongs[B].Title)
   else if Sort = 'popular' then
-    Result := CompareValue(fStats[B].TimesPlayed, fStats[A].TimesPlayed)
+  begin
+    Result := CompareValue(fStats[B].TimesPlayed, fStats[A].TimesPlayed);
+    if Result = 0 then
+      Result := CompareValue(RequestCount(fSongs[B].Key), RequestCount(fSongs[A].Key));
+  end
   else if Sort = 'requested' then
-    Result := CompareValue(RequestCount(fSongs[B].Key), RequestCount(fSongs[A].Key))
+  begin
+    // most songs were never requested, sung ones come next among them
+    Result := CompareValue(RequestCount(fSongs[B].Key), RequestCount(fSongs[A].Key));
+    if Result = 0 then
+      Result := CompareValue(fStats[B].TimesPlayed, fStats[A].TimesPlayed);
+  end
   else if Sort = 'score' then
     Result := CompareValue(fStats[B].BestScore, fStats[A].BestScore)
   else if Sort = 'year' then

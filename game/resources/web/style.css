@@ -363,6 +363,7 @@ main { padding: 12px 14px 80px; }
 .queue-item .votes strong { display: block; font-size: 18px; color: var(--text); }
 .queue-item.mine { box-shadow: inset 3px 0 0 var(--accent); }
 .queue-item .vote-btn { min-width: 44px; padding: 6px 10px; font-weight: 700; margin-top: 4px; }
+.queue-item .vote-btn.btn-danger { color: #0b0c1a; }
 .queue-item .pin { color: var(--warn); }
 
 .notice {
