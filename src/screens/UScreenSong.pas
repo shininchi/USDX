@@ -709,8 +709,8 @@ begin
     SDL_ModState := SDL_GetModState and (KMOD_LSHIFT + KMOD_RSHIFT
     + KMOD_LCTRL + KMOD_RCTRL + KMOD_LALT  + KMOD_RALT);
 
-    //Jump to Artist/Title
-    if ((SDL_ModState and KMOD_LALT <> 0) and (FreeListMode)) then
+    //Jump to Artist/Title (either Alt/Option key)
+    if (((SDL_ModState and (KMOD_LALT + KMOD_RALT)) <> 0) and (FreeListMode)) then
     begin
       if(PressedKey > 1114111) then
       begin
@@ -723,7 +723,7 @@ begin
         I2 := Length(CatSongs.Song);
 
         //Jump To Title
-        if (SDL_ModState = (KMOD_LALT or KMOD_LSHIFT)) then
+        if ((SDL_ModState and (KMOD_LSHIFT + KMOD_RSHIFT)) <> 0) then
         begin
           for I := 1 to High(CatSongs.Song) do
           begin
@@ -745,21 +745,16 @@ begin
           end;
         end
         //Jump to Artist
-        else if (SDL_ModState = KMOD_LALT) then
+        else if ((SDL_ModState and (KMOD_LCTRL + KMOD_RCTRL)) = 0) then
         begin
           for I := 1 to High(CatSongs.Song) do
           begin
             if (CatSongs.Song[(I + Interaction) mod I2].Visible) then
             begin
-              if (TSortingType(Ini.Sorting) = sFolder) then
-              begin
-                if CatSongs.Song[(I + Interaction) mod I2].Main then
-                  TempStr := CatSongs.Song[(I + Interaction) mod I2].Artist
-                else
-                  TempStr := CatSongs.Song[(I + Interaction) mod I2].Folder;
-              end
-              else
-                TempStr := CatSongs.Song[(I + Interaction) mod I2].Artist;
+              // songs are matched by artist, also when sorted by folder: inside a
+              // folder all songs share its name. Category buttons hold their
+              // name in Artist.
+              TempStr := CatSongs.Song[(I + Interaction) mod I2].Artist;
               if Length(TempStr) > 0 then TempLetter := UCS4UpperCase(UTF8ToUCS4String(TempStr)[0])
               else                        TempLetter := 0;
               //in case of tabs, the artist string may be enclosed in brackets so we check the first charactere is a bracket then go to next
