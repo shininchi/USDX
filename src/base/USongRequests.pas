@@ -348,6 +348,32 @@ begin
     Result := '';
 end;
 
+{* Songs can have several languages, separated by commas ("Spanish, English").
+ * Returns them trimmed and without repetitions. *}
+function SplitLanguages(const S: UTF8String): TStringList;
+var
+  Parts: TStringList;
+  I:     integer;
+  Lang:  UTF8String;
+begin
+  Result := TStringList.Create;
+  Result.CaseSensitive := false;
+  Parts := TStringList.Create;
+  try
+    Parts.Delimiter := ',';
+    Parts.StrictDelimiter := true;
+    Parts.DelimitedText := S;
+    for I := 0 to Parts.Count - 1 do
+    begin
+      Lang := CleanTag(Parts[I]);
+      if (Lang <> '') and (Result.IndexOf(Lang) < 0) then
+        Result.Add(Lang);
+    end;
+  finally
+    Parts.Free;
+  end;
+end;
+
 function NormalizeSearch(const S: UTF8String): UTF8String;
 begin
   Result := LowerCase(TransliterateToASCII(S));
@@ -1044,6 +1070,7 @@ end;
 procedure TSongRequests.RebuildCatalog;
 var
   Existing: integer;
+  Langs:    TStringList;
   I, N:     integer;
   Song:     TSong;
   CoverPath: IPath;
@@ -1060,7 +1087,14 @@ begin
     fSongs[I].Key := SongRequestKey(Song.Artist, Song.Title);
     fSongs[I].Artist := Song.Artist;
     fSongs[I].Title := Song.Title;
-    fSongs[I].Language := CleanTag(Song.Language);
+    Langs := SplitLanguages(Song.Language);
+    try
+      Langs.Delimiter := ',';
+      fSongs[I].Language := StringReplace(Langs.DelimitedText, ',', ', ', [rfReplaceAll]);
+      fSongs[I].Language := StringReplace(fSongs[I].Language, '"', '', [rfReplaceAll]);
+    finally
+      Langs.Free;
+    end;
     fSongs[I].Genre := CleanTag(Song.Genre);
     fSongs[I].Edition := CleanTag(Song.Edition);
     fSongs[I].Folder := Song.Folder;
@@ -1588,7 +1622,8 @@ function TSongRequests.InfoJSON(const UserId: UTF8String): UTF8String;
 var
   Root, Me:  TJSONObject;
   Langs, Genres, Folders, Decades: TStringList;
-  I:         integer;
+  SongLangs: TStringList;
+  I, J:      integer;
   User:      TSRUser;
 
   function ListToJSON(List: TStringList): TJSONArray;
@@ -1610,8 +1645,14 @@ begin
   try
     for I := 0 to High(fSongs) do
     begin
-      if (fSongs[I].Language <> '') and (Langs.IndexOf(fSongs[I].Language) < 0) then
-        Langs.Add(fSongs[I].Language);
+      SongLangs := SplitLanguages(fSongs[I].Language);
+      try
+        for J := 0 to SongLangs.Count - 1 do
+          if Langs.IndexOf(SongLangs[J]) < 0 then
+            Langs.Add(SongLangs[J]);
+      finally
+        SongLangs.Free;
+      end;
       if (fSongs[I].Genre <> '') and (Genres.IndexOf(fSongs[I].Genre) < 0) then
         Genres.Add(fSongs[I].Genre);
       if (fSongs[I].Folder <> '') and (Folders.IndexOf(fSongs[I].Folder) < 0) then
@@ -1778,6 +1819,7 @@ var
   Count:   integer;
   I:       integer;
   Words:   TStringList;
+  SongLangs: TStringList;
   Match:   boolean;
   W:       integer;
   Root:    TJSONObject;
@@ -1818,7 +1860,14 @@ begin
         if Params.Language = '-' then
           Match := fSongs[I].Language = ''
         else
-          Match := SameText(fSongs[I].Language, Params.Language);
+        begin
+          SongLangs := SplitLanguages(fSongs[I].Language);
+          try
+            Match := SongLangs.IndexOf(Params.Language) >= 0;
+          finally
+            SongLangs.Free;
+          end;
+        end;
       end;
       if Match and (Params.Genre <> '') then
         Match := SameText(fSongs[I].Genre, Params.Genre);
