@@ -10,6 +10,12 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <script>
+    // Safari uses this icon on the Mac and on iPhone/iPad; the Mac gets the
+    // transparent one, touch devices keep the one with a background
+    if (navigator.maxTouchPoints < 2)
+      document.querySelector('link[rel="apple-touch-icon"]').href = '/assets/apple-touch-icon-mac.png';
+  </script>
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Cancionero">
@@ -18,7 +24,7 @@
 <body>
   <header class="top">
     <div class="top-row">
-      <div class="brand">🎤 <span data-i18n="brand">Cancionero</span></div>
+      <div class="brand"><img class="brand-logo" src="/assets/logo-128.png" alt=""><span data-i18n="brand">Cancionero</span></div>
       <button class="chip" id="autoplayChip" aria-pressed="false"></button>
       <button class="chip" id="nickChip" title="Cambiar apodo">…</button>
     </div>

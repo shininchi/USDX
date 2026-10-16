@@ -40,7 +40,8 @@ function fitHeader() {
   const header = document.querySelector('header.top');
   const brand = header.querySelector('.brand');
   header.classList.remove('compact');
-  if (brand.scrollWidth > brand.clientWidth) header.classList.add('compact');
+  const title = brand.querySelector('span');
+  if (title.scrollWidth > title.clientWidth || brand.scrollWidth > brand.clientWidth) header.classList.add('compact');
 }
 
 function renderAutoplay() {

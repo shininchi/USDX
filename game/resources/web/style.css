@@ -93,7 +93,12 @@ header.top {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+.brand span { overflow: hidden; text-overflow: ellipsis; }
+.brand-logo { width: 30px; height: 30px; flex-shrink: 0; }
 
 .chip {
   display: inline-flex;
