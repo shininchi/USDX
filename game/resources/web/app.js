@@ -2,7 +2,9 @@
 
 // Guest page: browse the library, request songs and follow the queue.
 
-const PAGE_SIZE = 60;
+// the whole list is loaded at once (a few hundred KB) so fast scrolling
+// never hits the end of the loaded part; it is drawn in chunks
+const RENDER_CHUNK = 200;
 
 const state = {
   info: null,
@@ -11,7 +13,7 @@ const state = {
   sort: storageGet('sr.sort', 'artist'),
   query: '',
   filters: { language: '', genre: '', decade: '', folder: '', duet: '-1', video: '-1' },
-  offset: 0,
+  items: [],
   total: 0,
   loading: false,
   requestId: 0,
@@ -104,8 +106,8 @@ function askNick() {
 
 // ---------- song list ----------
 
-function searchParams(offset) {
-  const params = new URLSearchParams({ q: state.query, sort: state.sort, offset, limit: PAGE_SIZE });
+function searchParams() {
+  const params = new URLSearchParams({ q: state.query, sort: state.sort, offset: 0, limit: 5000 });
   for (const [key, value] of Object.entries(state.filters)) {
     if (value !== '' && value !== '-1') params.set(key, value);
   }
@@ -138,37 +140,110 @@ function songNode(song) {
   return el('div', { class: 'song', onclick: () => openSong(song.id, state.autoplay && song.audio ? primeAudio(song.id) : null) }, cover, meta);
 }
 
-async function loadSongs(reset) {
-  if (reset) {
-    state.offset = 0;
-    state.total = 0;
-    $('results').replaceChildren();
-  } else if (state.loading || state.offset >= state.total) {
-    return;
-  }
+// Loads the whole (filtered) list. keepScroll keeps the position, e.g.
+// after a request changed the queue marks.
+async function loadSongs(keepScroll = false) {
   const requestId = ++state.requestId;
-  state.loading = true;
-  $('summary').textContent = t('loading');
+  const scrollY = window.scrollY;
+  if (!keepScroll) $('summary').textContent = t('loading');
+  let data;
   try {
-    const data = await api('/api/songs?' + searchParams(state.offset));
-    if (requestId !== state.requestId) return; // a newer search started
-    state.total = data.total;
-    state.offset += data.items.length;
-    $('results').append(...data.items.map(songNode));
-    $('summary').textContent = t('songs_count', data.total);
-    if (data.total === 0) $('results').append(el('div', { class: 'empty', text: t('no_results') }));
+    data = await api('/api/songs?' + searchParams());
   } catch (error) {
     if (requestId === state.requestId) $('summary').textContent = errorText(error);
-  } finally {
-    if (requestId === state.requestId) state.loading = false;
+    return;
   }
-  // keep loading while the sentinel is still visible
-  if (requestId === state.requestId && state.offset < state.total && isSentinelVisible()) loadSongs(false);
+  if (requestId !== state.requestId) return; // a newer search started
+
+  state.items = data.items;
+  state.total = data.total;
+  $('summary').textContent = t('songs_count', data.total);
+  const results = $('results');
+  results.replaceChildren();
+  if (data.total === 0) {
+    results.append(el('div', { class: 'empty', text: t('no_results') }));
+    renderIndex();
+    return;
+  }
+
+  if (keepScroll) {
+    // replace everything at once so the page height and position stay
+    results.replaceChildren(...data.items.map(songNode));
+    window.scrollTo(0, scrollY);
+  } else {
+    // draw in chunks so the page stays responsive while the list grows
+    for (let start = 0; start < data.items.length; start += RENDER_CHUNK) {
+      if (requestId !== state.requestId) return;
+      results.append(...data.items.slice(start, start + RENDER_CHUNK).map(songNode));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    }
+  }
+  renderIndex();
 }
 
-function isSentinelVisible() {
-  const rect = $('sentinel').getBoundingClientRect();
-  return rect.top < window.innerHeight + 400;
+// ---------- A-Z index and back to top ----------
+
+const INDEX_LETTERS = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+let indexFirst = {}; // letter -> index of its first song in state.items
+
+function letterOf(text) {
+  const first = (text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().charAt(0).toUpperCase();
+  return first >= 'A' && first <= 'Z' ? first : '#';
+}
+
+function renderIndex() {
+  const bar = $('azIndex');
+  const useful = (state.sort === 'artist' || state.sort === 'title') && state.items.length >= 40 && state.tab === 'songs';
+  bar.classList.toggle('hidden', !useful);
+  if (!useful) return;
+  indexFirst = {};
+  state.items.forEach((item, i) => {
+    const letter = letterOf(state.sort === 'title' ? item.title : item.artist);
+    if (!(letter in indexFirst)) indexFirst[letter] = i;
+  });
+  bar.replaceChildren(...INDEX_LETTERS.map(letter =>
+    el('span', { class: letter in indexFirst ? '' : 'off', dataset: { letter }, text: letter })));
+}
+
+function jumpToLetter(letter) {
+  // a letter without songs jumps to the next one that has some
+  const start = INDEX_LETTERS.indexOf(letter);
+  const target = INDEX_LETTERS.slice(start).find(l => l in indexFirst);
+  if (target === undefined) return;
+  const node = $('results').children[indexFirst[target]];
+  if (!node) return;
+  const header = document.querySelector('header.top').offsetHeight;
+  window.scrollTo(0, node.getBoundingClientRect().top + window.scrollY - header - 8);
+  const bubble = $('azBubble');
+  bubble.textContent = target;
+  bubble.classList.remove('hidden');
+}
+
+function setupIndex() {
+  const bar = $('azIndex');
+  let hideTimer;
+  const pick = event => {
+    const node = document.elementFromPoint(event.clientX, event.clientY);
+    if (node && node.dataset && node.dataset.letter) jumpToLetter(node.dataset.letter);
+  };
+  bar.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    bar.setPointerCapture(event.pointerId);
+    clearTimeout(hideTimer);
+    pick(event);
+  });
+  bar.addEventListener('pointermove', event => {
+    if (bar.hasPointerCapture(event.pointerId)) pick(event);
+  });
+  const release = () => { hideTimer = setTimeout(() => $('azBubble').classList.add('hidden'), 500); };
+  bar.addEventListener('pointerup', release);
+  bar.addEventListener('pointercancel', release);
+
+  const toTop = $('toTop');
+  toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  window.addEventListener('scroll', () => {
+    toTop.classList.toggle('hidden', window.scrollY < 1500 || state.tab !== 'songs');
+  }, { passive: true });
 }
 
 function setView(view) {
@@ -176,7 +251,7 @@ function setView(view) {
   storageSet('sr.view', view);
   $('results').className = `results ${view}`;
   document.querySelectorAll('.view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  loadSongs(true);
+  loadSongs();
 }
 
 function updateFiltersBadge() {
@@ -492,6 +567,8 @@ function setTab(tab) {
   $('tabQueue').classList.toggle('active', tab === 'queue');
   $('songsView').classList.toggle('hidden', tab !== 'songs');
   $('queueView').classList.toggle('hidden', tab !== 'queue');
+  renderIndex();
+  $('toTop').classList.toggle('hidden', tab !== 'songs' || window.scrollY < 1500);
   if (tab === 'queue') refreshQueue();
 }
 
@@ -507,12 +584,12 @@ async function start() {
     b.addEventListener('click', () => setView(b.dataset.view));
   });
 
-  $('search').addEventListener('input', debounce(e => { state.query = e.target.value; loadSongs(true); }, 250));
-  $('sort').addEventListener('change', e => { state.sort = e.target.value; storageSet('sr.sort', state.sort); loadSongs(true); });
+  $('search').addEventListener('input', debounce(e => { state.query = e.target.value; loadSongs(); }, 250));
+  $('sort').addEventListener('change', e => { state.sort = e.target.value; storageSet('sr.sort', state.sort); loadSongs(); });
   $('filtersBtn').addEventListener('click', () => $('filters').classList.toggle('hidden'));
   const filterInputs = { fLanguage: 'language', fGenre: 'genre', fDecade: 'decade', fFolder: 'folder', fDuet: 'duet', fVideo: 'video' };
   for (const [id, key] of Object.entries(filterInputs)) {
-    $(id).addEventListener('change', e => { state.filters[key] = e.target.value; updateFiltersBadge(); loadSongs(true); });
+    $(id).addEventListener('change', e => { state.filters[key] = e.target.value; updateFiltersBadge(); loadSongs(); });
   }
   $('resetFilters').addEventListener('click', () => {
     for (const [id, key] of Object.entries(filterInputs)) {
@@ -520,7 +597,7 @@ async function start() {
       $(id).value = state.filters[key];
     }
     updateFiltersBadge();
-    loadSongs(true);
+    loadSongs();
   });
   $('tabSongs').addEventListener('click', () => setTab('songs'));
   $('tabQueue').addEventListener('click', () => setTab('queue'));
@@ -528,10 +605,7 @@ async function start() {
   $('autoplayChip').addEventListener('click', toggleAutoplay);
   renderAutoplay();
   window.addEventListener('resize', debounce(fitHeader, 150));
-
-  new IntersectionObserver(entries => {
-    if (entries.some(e => e.isIntersecting)) loadSongs(false);
-  }, { rootMargin: '400px' }).observe($('sentinel'));
+  setupIndex();
 
   try {
     await loadInfo();
@@ -540,7 +614,7 @@ async function start() {
     $('summary').textContent = errorText(error);
     return;
   }
-  loadSongs(true);
+  loadSongs();
   refreshQueue();
   if (!state.info.me.nick) askNick();
 

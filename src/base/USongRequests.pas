@@ -1840,7 +1840,7 @@ begin
     SortIndices(Indices, Params.Sort);
 
     Limit := Params.Limit;
-    if (Limit <= 0) or (Limit > 200) then
+    if (Limit <= 0) or (Limit > 5000) then
       Limit := 60;
 
     Root.Add('total', Count);
