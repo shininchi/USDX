@@ -67,6 +67,9 @@ function SongRequestsURL: UTF8String;
 implementation
 
 uses
+  {$IFDEF UNIX}
+  BaseUnix,
+  {$ENDIF}
   fpjson,
   jsonparser,
   UPathUtils,
@@ -85,6 +88,12 @@ begin
   SongRequests := TSongRequests.Create;
   if SongRequests.Config.Enabled then
   begin
+    {$IFDEF UNIX}
+    // Browsers often cancel audio and video downloads halfway. Writing to
+    // such a closed connection raises SIGPIPE, which ends the whole game
+    // unless it is ignored; the write then just fails with an error.
+    FpSignal(SIGPIPE, SignalHandler(SIG_IGN));
+    {$ENDIF}
     Server := TSongRequestsServer.Create(SongRequests.Config.Port);
     Log.LogStatus('Song requests available at ' + SongRequestsURL, 'StartSongRequests');
   end;
