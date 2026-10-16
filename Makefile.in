@@ -395,6 +395,12 @@ rpm: all
 # macOS defines
 #################################################
 
+# codesign identity for the app bundle. "-" signs ad hoc, which gives every
+# build a new identity, so macOS asks again for microphone access. Set it to
+# the name of a local code signing certificate to keep the permission, e.g.
+#   make macos-standalone-app MACOS_CODESIGN_IDENTITY="USDX Local"
+MACOS_CODESIGN_IDENTITY ?= -
+
 # otool: macOS object file displaying tool
 OTOOL := /usr/bin/otool 
 # install_name_tool: macOS tool to change dynamic shared library install names
@@ -464,7 +470,7 @@ macos-standalone-app: macos-app
 
 	@rm -f $(macos_bundle_path)/MacOS/$(USDX_BIN_NAME)
 	@$(MAKE) -f Makefile.macos-helper
-	codesign --force --deep --sign - "./UltraStar Deluxe.app"
+	codesign --force --deep --sign "$(MACOS_CODESIGN_IDENTITY)" "./UltraStar Deluxe.app"
 
 
 # final messages
@@ -488,7 +494,7 @@ macos-dmg: macos-standalone-app
 	find $(USDX_GAME_DIR) -name 'LICENSE.*' -maxdepth 1 -exec cp {} "/Volumes/UltraStar Deluxe/Licenses" \;
 #	/bin/cp "ultrastardx/icons/UltraStarDeluxeVolumeIcon.icns "/Volumes/UltraStar Deluxe/.VolumeIcon.icns"
 #	/Developer/Tools/SetFile -a C "/Volumes/UltraStar Deluxe/.VolumeIcon.icns" "/Volumes/UltraStar Deluxe"
-	codesign --force --deep --sign - "/Volumes/UltraStar Deluxe/UltraStar Deluxe.app"
+	codesign --force --deep --sign "$(MACOS_CODESIGN_IDENTITY)" "/Volumes/UltraStar Deluxe/UltraStar Deluxe.app"
 	$(HDIUTIL) detach "/Volumes/UltraStar Deluxe"
 	$(HDIUTIL) convert "UltraStar Deluxe.sparseimage" -format UDBZ -o "UltraStar Deluxe.dmg"
 	$(RM) "UltraStar Deluxe.sparseimage"
