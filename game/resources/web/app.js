@@ -488,6 +488,7 @@ function setTab(tab) {
 
 async function start() {
   applyTranslations();
+  document.title = t('page_title');
   $('sort').value = state.sort;
   $('results').className = `results ${state.view}`;
   document.querySelectorAll('.view-toggle button').forEach(b => {

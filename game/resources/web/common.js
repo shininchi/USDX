@@ -6,7 +6,7 @@ const LANG = (navigator.language || 'es').toLowerCase().startsWith('es') ? 'es' 
 
 const TEXTS = {
   es: {
-    brand: 'Peticiones', tab_songs: 'Canciones', tab_queue: 'Cola',
+    brand: 'Cancionero', page_title: 'UltraStar - Cancionero', tab_songs: 'Canciones', tab_queue: 'Cola',
     search_placeholder: 'Buscar artista o canción…', filters: 'Filtros',
     sort_artist: 'Artista A–Z', sort_title: 'Título A–Z', sort_popular: 'Más cantadas',
     sort_requested: 'Más pedidas', sort_score: 'Mejor puntuación', sort_year: 'Más recientes',
@@ -73,7 +73,7 @@ const TEXTS = {
     ago_s: s => `hace ${s} s`, ago_m: m => `hace ${m} min`, ago_h: h => `hace ${h} h`, ago_d: d => `hace ${d} d`,
   },
   en: {
-    brand: 'Requests', tab_songs: 'Songs', tab_queue: 'Queue',
+    brand: 'Songbook', page_title: 'UltraStar - Songbook', tab_songs: 'Songs', tab_queue: 'Queue',
     search_placeholder: 'Search artist or song…', filters: 'Filters',
     sort_artist: 'Artist A–Z', sort_title: 'Title A–Z', sort_popular: 'Most sung',
     sort_requested: 'Most requested', sort_score: 'Best score', sort_year: 'Newest',
