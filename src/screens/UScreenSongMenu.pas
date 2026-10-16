@@ -358,26 +358,28 @@ begin
 
         Text[0].Text := Language.Translate('SONG_MENU_NAME_MAIN');
 
-        Button[0].Visible := true;
-        Button[1].Visible := ((Length(PlaylistMedley.Song) > 0) or (CatSongs.Song[ScreenSong.Interaction].Medley.Source > msNone));
-        // add the song to or remove it from the song request queue
-        Button[2].Visible := (SongRequests <> nil) and SongRequests.Config.Enabled and
+        // first: add the song to or remove it from the song request queue
+        Button[0].Visible := (SongRequests <> nil) and SongRequests.Config.Enabled and
           not CatSongs.Song[ScreenSong.Interaction].Main;
+        Button[1].Visible := true;
+        Button[2].Visible := ((Length(PlaylistMedley.Song) > 0) or (CatSongs.Song[ScreenSong.Interaction].Medley.Source > msNone));
         Button[3].Visible := true;
         Button[4].Visible := false;
+        if not Button[0].Visible then
+          Interaction := 1;
 
         SelectsS[0].Visible := false;
         SelectsS[1].Visible := false;
         SelectsS[2].Visible := false;
 
-        Button[0].Text[0].Text := Language.Translate('SONG_MENU_SONG');
-        Button[1].Text[0].Text := Language.Translate('SONG_MENU_MEDLEY');
-        if Button[2].Visible and
+        if Button[0].Visible and
            SongRequests.IsRequested(CatSongs.Song[ScreenSong.Interaction].Artist,
                                     CatSongs.Song[ScreenSong.Interaction].Title) then
-          Button[2].Text[0].Text := Language.Translate('SONG_MENU_REQUESTS_REMOVE')
+          Button[0].Text[0].Text := Language.Translate('SONG_MENU_REQUESTS_REMOVE')
         else
-          Button[2].Text[0].Text := Language.Translate('SONG_MENU_REQUESTS_ADD');
+          Button[0].Text[0].Text := Language.Translate('SONG_MENU_REQUESTS_ADD');
+        Button[1].Text[0].Text := Language.Translate('SONG_MENU_SONG');
+        Button[2].Text[0].Text := Language.Translate('SONG_MENU_MEDLEY');
         Button[3].Text[0].Text := Language.Translate('SONG_MENU_REFRESH_SCORES');
       end;
     SM_Song:
@@ -777,17 +779,17 @@ begin
     SM_Main:
       begin
         case Interaction of
-          0: // button 1
+          1: // button 2
             begin
               MenuShow(SM_Song);
             end;
 
-          1: // button 2
+          2: // button 3
             begin
               MenuShow(SM_Medley);
             end;
 
-          2: // button 3: add the song to or remove it from the song request queue
+          0: // button 1: add the song to or remove it from the song request queue
             begin
               Song := CatSongs.Song[ScreenSong.Interaction];
               if (SongRequests <> nil) then
