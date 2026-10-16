@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1020">
+  <title>UltraStar · Peticiones</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-row">
+      <div class="brand">🎤 <span data-i18n="brand">Peticiones</span></div>
+      <button class="chip" id="nickChip" title="Cambiar apodo">…</button>
+    </div>
+    <nav class="tabs">
+      <button id="tabSongs" class="active" data-i18n="tab_songs">Canciones</button>
+      <button id="tabQueue"><span data-i18n="tab_queue">Cola</span><span class="badge hidden" id="queueBadge">0</span></button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="songsView">
+      <input type="search" id="search" autocomplete="off" data-i18n-placeholder="search_placeholder" placeholder="Buscar artista o canción…">
+      <div class="toolbar">
+        <button class="btn-ghost" id="filtersBtn"><span data-i18n="filters">Filtros</span><span class="badge hidden" id="filtersBadge">0</span></button>
+        <select id="sort" aria-label="Orden">
+          <option value="artist" data-i18n="sort_artist">Artista A–Z</option>
+          <option value="title" data-i18n="sort_title">Título A–Z</option>
+          <option value="popular" data-i18n="sort_popular">Más cantadas</option>
+          <option value="requested" data-i18n="sort_requested">Más pedidas</option>
+          <option value="score" data-i18n="sort_score">Mejor puntuación</option>
+          <option value="year" data-i18n="sort_year">Más recientes</option>
+        </select>
+        <div class="view-toggle" role="group" aria-label="Vista">
+          <button data-view="grid" title="Cuadrícula">▦</button>
+          <button data-view="list" title="Lista">☰</button>
+          <button data-view="text" title="Solo texto">≡</button>
+        </div>
+      </div>
+
+      <div class="filters hidden" id="filters">
+        <label><span data-i18n="f_language">Idioma</span><select id="fLanguage"></select></label>
+        <label><span data-i18n="f_genre">Género</span><select id="fGenre"></select></label>
+        <label><span data-i18n="f_decade">Década</span><select id="fDecade"></select></label>
+        <label><span data-i18n="f_folder">Carpeta</span><select id="fFolder"></select></label>
+        <label><span data-i18n="f_duet">Dúo</span>
+          <select id="fDuet">
+            <option value="-1" data-i18n="any">Cualquiera</option>
+            <option value="1" data-i18n="yes">Sí</option>
+            <option value="0" data-i18n="no">No</option>
+          </select>
+        </label>
+        <label><span data-i18n="f_video">Vídeo</span>
+          <select id="fVideo">
+            <option value="-1" data-i18n="any">Cualquiera</option>
+            <option value="1" data-i18n="with_video">Con vídeo</option>
+            <option value="0" data-i18n="without_video">Sin vídeo</option>
+          </select>
+        </label>
+        <div class="actions"><button class="btn-ghost" id="resetFilters" data-i18n="reset">Quitar filtros</button></div>
+      </div>
+
+      <div class="summary" id="summary"></div>
+      <div class="results grid" id="results"></div>
+      <div class="sentinel" id="sentinel"></div>
+    </section>
+
+    <section id="queueView" class="hidden">
+      <div class="notice hidden" id="pausedNotice" data-i18n="paused_notice">Las peticiones están cerradas ahora mismo.</div>
+      <div class="queue" id="queue"></div>
+    </section>
+  </main>
+
+  <script src="/assets/common.js"></script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

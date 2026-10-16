@@ -162,6 +162,7 @@ uses
   //Includes - Menu System
   //------------------------------
   UDisplay               in 'menu\UDisplay.pas',
+  USongRequestsOverlay   in 'menu\USongRequestsOverlay.pas',
   UMenu                  in 'menu\UMenu.pas',
   UMenuStatic            in 'menu\UMenuStatic.pas',
   UMenuText              in 'menu\UMenuText.pas',
@@ -208,6 +209,8 @@ uses
   UFiles            in 'base\UFiles.pas',
   UGraphicClasses   in 'base\UGraphicClasses.pas',
   UPlaylist         in 'base\UPlaylist.pas',
+  USongRequests     in 'base\USongRequests.pas',
+  USongRequestsServer in 'base\USongRequestsServer.pas',
   UCommandLine      in 'base\UCommandLine.pas',
   URingBuffer       in 'base\URingBuffer.pas',
   USingScores       in 'base\USingScores.pas',

@@ -1,0 +1,250 @@
+{* UltraStar Deluxe - Karaoke Game
+ *
+ * UltraStar Deluxe is the legal property of its developers, whose names
+ * are too numerous to list here. Please refer to the COPYRIGHT
+ * file distributed with this source distribution.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; see the file COPYING. If not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+ *}
+
+unit USongRequestsOverlay;
+
+{*
+ * QR code with the address of the song request web client. It is hidden by
+ * default and toggled with the I key on menu screens. It hides itself after
+ * Config.QRTimeout seconds so it does not burn into OLED screens.
+ *}
+
+interface
+
+{$IFDEF FPC}
+  {$MODE Delphi}
+{$ENDIF}
+
+{$I switches.inc}
+
+{* Returns true if the key press was used to toggle the QR code. *}
+function SongRequestsHandleKey(Key: cardinal; Repeated: boolean): boolean;
+
+{* Draws the QR code if it is visible. Called after the screen was drawn. *}
+procedure SongRequestsDrawOverlay;
+
+{* Hides the QR code immediately. *}
+procedure SongRequestsHideQR;
+
+implementation
+
+uses
+  SysUtils,
+  Math,
+  sdl2,
+  fpqrcodegen,
+  UDisplay,
+  UGraphic,
+  ULanguage,
+  URenderer,
+  USongRequests,
+  USongRequestsServer,
+  UText;
+
+const
+  FADE_MS = 250;
+
+var
+  Visible:   boolean;
+  ShownAt:   cardinal; // SDL ticks when the QR code was shown
+  HiddenAt:  cardinal; // SDL ticks when hiding started, 0 = not hiding
+  URL:       UTF8String;
+  QRSize:    integer;
+  QRModules: array of boolean;
+
+function OverlayAllowed: boolean;
+begin
+  // never cover the lyrics while singing or editing
+  Result := (SongRequests <> nil) and SongRequests.Config.Enabled and
+            (Display.NextScreen = nil) and
+            (Display.CurrentScreen <> @ScreenSing) and
+            (Display.CurrentScreen <> @ScreenJukebox) and
+            (Display.CurrentScreen <> @ScreenEdit) and
+            (Display.CurrentScreen <> @ScreenEditSub) and
+            (Display.CurrentScreen <> @ScreenEditConvert);
+end;
+
+procedure GenerateQR;
+var
+  Generator: TQRCodeGenerator;
+  X, Y:      integer;
+begin
+  URL := SongRequestsURL;
+  Generator := TQRCodeGenerator.Create;
+  try
+    Generator.Generate(URL);
+    QRSize := Generator.Size;
+    SetLength(QRModules, QRSize * QRSize);
+    for Y := 0 to QRSize - 1 do
+      for X := 0 to QRSize - 1 do
+        QRModules[Y * QRSize + X] := Generator.Bits[X, Y];
+  finally
+    Generator.Free;
+  end;
+end;
+
+procedure ShowQR;
+begin
+  GenerateQR;
+  Visible := true;
+  ShownAt := SDL_GetTicks;
+  HiddenAt := 0;
+end;
+
+procedure SongRequestsHideQR;
+begin
+  Visible := false;
+  HiddenAt := 0;
+end;
+
+procedure StartHiding;
+begin
+  if Visible and (HiddenAt = 0) then
+    HiddenAt := SDL_GetTicks;
+end;
+
+function SongRequestsHandleKey(Key: cardinal; Repeated: boolean): boolean;
+const
+  MODIFIERS = KMOD_SHIFT or KMOD_CTRL or KMOD_ALT or KMOD_GUI;
+begin
+  Result := false;
+  if (Key <> SDLK_I) or Repeated then
+    Exit;
+  if (SDL_GetModState and MODIFIERS) <> 0 then
+    Exit;
+  // typing a name or a search term must still be possible
+  if SDL_IsTextInputActive = SDL_TRUE then
+    Exit;
+  if not OverlayAllowed then
+    Exit;
+
+  if Visible and (HiddenAt = 0) then
+    StartHiding
+  else
+    ShowQR;
+  Result := true;
+end;
+
+procedure SongRequestsDrawOverlay;
+var
+  Ticks:       cardinal;
+  Alpha:     single;
+  PanelW, PanelH, PanelX, PanelY: single;
+  QRArea, Module, QRX, QRY: single;
+  X, Y, RunStart: integer;
+  Remaining: single;
+  Text:      UTF8String;
+  DepthTest: boolean;
+begin
+  if not Visible then
+    Exit;
+
+  if not OverlayAllowed then
+  begin
+    SongRequestsHideQR;
+    Exit;
+  end;
+
+  Ticks := SDL_GetTicks;
+  if (HiddenAt = 0) and (SongRequests.Config.QRTimeout > 0) and
+     (Ticks - ShownAt >= cardinal(SongRequests.Config.QRTimeout) * 1000) then
+    StartHiding;
+
+  // fade in and out
+  Alpha := Min(1, (Ticks - ShownAt) / FADE_MS);
+  if HiddenAt <> 0 then
+  begin
+    Alpha := Min(Alpha, 1 - (Ticks - HiddenAt) / FADE_MS);
+    if Alpha <= 0 then
+    begin
+      SongRequestsHideQR;
+      Exit;
+    end;
+  end;
+
+  DepthTest := Renderer.DepthTest;
+  Renderer.DepthTest := false;
+
+  // panel on the right side, vertically centered
+  PanelW := 260;
+  PanelH := 330;
+  PanelX := RenderW - PanelW - 20;
+  PanelY := (RenderH - PanelH) / 2;
+  Renderer.DrawQuad(PanelX, PanelY, 0, PanelW, PanelH, 0.05, 0.05, 0.1, 0.85 * Alpha);
+
+  // white square with the code and its quiet zone
+  QRArea := PanelW - 40;
+  QRX := PanelX + 20;
+  QRY := PanelY + 46;
+  Renderer.DrawQuad(QRX, QRY, 0, QRArea, QRArea, 1, 1, 1, Alpha);
+  if QRSize > 0 then
+  begin
+    Module := QRArea / (QRSize + 4);
+    for Y := 0 to QRSize - 1 do
+    begin
+      // draw runs of dark modules as one quad
+      RunStart := -1;
+      for X := 0 to QRSize do
+      begin
+        if (X < QRSize) and QRModules[Y * QRSize + X] then
+        begin
+          if RunStart < 0 then
+            RunStart := X;
+        end
+        else if RunStart >= 0 then
+        begin
+          Renderer.DrawQuad(QRX + (RunStart + 2) * Module, QRY + (Y + 2) * Module, 0,
+            (X - RunStart) * Module + 0.5, Module + 0.5, 0, 0, 0, Alpha);
+          RunStart := -1;
+        end;
+      end;
+    end;
+  end;
+
+  // title and address
+  SetFontFamily(0);
+  SetFontStyle(ftBold);
+  SetFontItalic(false);
+  SetFontSize(24);
+  SetFontColor(1, 1, 1, Alpha);
+  Text := Language.Translate('SONG_REQUESTS_QR_TITLE');
+  SetFontPos(PanelX + (PanelW - TextWidth(Text)) / 2, PanelY + 10);
+  PrintText(Text);
+
+  SetFontStyle(ftRegular);
+  SetFontSize(18);
+  SetFontColor(0.8, 0.85, 1, Alpha);
+  SetFontPos(PanelX + (PanelW - TextWidth(URL)) / 2, QRY + QRArea + 10);
+  PrintText(URL);
+
+  // remaining time
+  if (SongRequests.Config.QRTimeout > 0) and (HiddenAt = 0) then
+  begin
+    Remaining := 1 - (Ticks - ShownAt) / (SongRequests.Config.QRTimeout * 1000);
+    Renderer.DrawQuad(PanelX, PanelY + PanelH - 4, 0, PanelW * Max(0, Remaining), 4,
+      0.4, 0.7, 1, Alpha);
+  end;
+
+  Renderer.DepthTest := DepthTest;
+end;
+
+end.

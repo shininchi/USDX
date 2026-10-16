@@ -100,6 +100,9 @@ uses
   ULuaText,
   ULuaParty,
   ULuaScreenSing,
+  USongRequests,
+  USongRequestsOverlay,
+  USongRequestsServer,
   UTime,
   UWebcam;
   //UVideoAcinerella;
@@ -243,6 +246,10 @@ begin
       *}
     SoundLib.StartBgMusic;
 
+    // song requests from guests' phones
+    Log.LogStatus('Song Requests', 'Initialization');
+    StartSongRequests;
+
     //------------------------------
     // Start Mainloop
     //------------------------------
@@ -259,6 +266,9 @@ begin
     // TODO:
     // call an uninitialize routine for every initialize step
     // or at least use the corresponding Free methods
+
+    Log.LogStatus('Stopping Song Requests', 'Finalization');
+    StopSongRequests;
 
     Log.LogStatus('Closing DB file', 'Finalization');
     if (DataBase <> nil) then
@@ -321,6 +331,9 @@ begin
 
       // keyboard/mouse/joystick events
       CheckEvents;
+
+      if (SongRequests <> nil) then
+        SongRequests.Tick;
 
       // display
       Done := not Display.Draw;
@@ -541,6 +554,11 @@ begin
             // if print is pressed -> make screenshot and save to screenshot path
             if (SimKey = SDLK_SYSREQ) or (SimKey = SDLK_PRINTSCREEN) then
               Display.SaveScreenShot
+            // toggle the QR code of the song request web client
+            else if (Event.type_ = SDL_KEYDOWN) and
+                    SongRequestsHandleKey(SimKey, Event.key._repeat <> 0) then
+              // key consumed
+
             // if there is a visible popup then let it handle input instead of underlying screen
             // shoud be done in a way to be sure the topmost popup has preference (maybe error, then check)
             else if (ScreenPopupError <> nil) and (ScreenPopupError.Visible) then

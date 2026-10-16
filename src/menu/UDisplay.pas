@@ -176,7 +176,8 @@ uses
   UMain,
   UTime,
   ULanguage,
-  UPathUtils
+  UPathUtils,
+  USongRequestsOverlay
   {$IFDEF MSWINDOWS}
   ,Windows
   {$ENDIF}
@@ -490,7 +491,10 @@ begin
     end;
 
     if not BlackScreen then
+    begin
+      SongRequestsDrawOverlay;
       DrawCursor;
+    end;
   end; // for
 end;
 
