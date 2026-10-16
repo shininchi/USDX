@@ -117,6 +117,11 @@ begin
   Result := '';
   if SongRequests = nil then
     Exit;
+  if SongRequests.Config.PublicURL <> '' then
+  begin
+    Result := SongRequests.Config.PublicURL;
+    Exit;
+  end;
   Host := SongRequests.Config.Host;
   if Host = '' then
     Host := GetLocalIPAddress;
@@ -446,6 +451,8 @@ var
   WebDir: UTF8String;
   JSON:   UTF8String;
   Status: integer;
+  Proxied:   boolean;
+  Forwarded: UTF8String;
 
   function QueryInt(const Name: UTF8String; Default: integer): integer;
   begin
@@ -472,6 +479,18 @@ begin
   try
     try
       IP := ARequest.RemoteAddress;
+      // Behind a local HTTPS proxy (e.g. Caddy) every request comes from this
+      // computer; the guest's address is then in X-Forwarded-For. It is only
+      // trusted from localhost, so guests cannot fake it.
+      Proxied := false;
+      if IsLocalhost(IP) and (ARequest.GetCustomHeader('X-Forwarded-For') <> '') then
+      begin
+        Forwarded := ARequest.GetCustomHeader('X-Forwarded-For');
+        if Pos(',', Forwarded) > 0 then
+          Forwarded := Copy(Forwarded, 1, Pos(',', Forwarded) - 1);
+        IP := Trim(Forwarded);
+        Proxied := true;
+      end;
       if (not SongRequests.Config.AllowRemote) and (not IsPrivateAddress(IP)) then
       begin
         AResponse.Code := 403;
@@ -494,7 +513,7 @@ begin
       end;
 
       Token := ARequest.CookieFields.Values[ADMIN_COOKIE];
-      Admin := IsLocalhost(IP) or SongRequests.IsAdminSession(Token);
+      Admin := (IsLocalhost(IP) and not Proxied) or SongRequests.IsAdminSession(Token);
 
       // static files
       if (URLPath = '/') or (URLPath = '/index.html') then

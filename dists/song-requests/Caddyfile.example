@@ -1,0 +1,27 @@
+# HTTPS in front of the song request server of UltraStar Deluxe.
+#
+# 1. Point a host name at the computer that runs the game, e.g. with DuckDNS
+#    (example.duckdns.org -> 192.168.1.10).
+# 2. Get a certificate with DNS validation, no ports need to be opened:
+#      export DuckDNS_Token="..."
+#      acme.sh --issue --dns dns_duckdns -d example.duckdns.org --server letsencrypt
+#      acme.sh --install-cert -d example.duckdns.org --ecc \
+#        --key-file /opt/homebrew/etc/usdx-tls/key.pem \
+#        --fullchain-file /opt/homebrew/etc/usdx-tls/fullchain.pem \
+#        --reloadcmd "brew services restart caddy"
+# 3. Copy this file to /opt/homebrew/etc/Caddyfile, replace the host name and
+#    start Caddy: brew services start caddy
+# 4. In config.ini, [SongRequests]: PublicURL=https://example.duckdns.org
+#
+# The game trusts X-Forwarded-For only from localhost, so guests coming
+# through the proxy keep their own address (and need the admin PIN).
+{
+	auto_https disable_redirects
+	admin off
+}
+
+example.duckdns.org {
+	tls /opt/homebrew/etc/usdx-tls/fullchain.pem /opt/homebrew/etc/usdx-tls/key.pem
+	encode gzip
+	reverse_proxy 127.0.0.1:8080
+}

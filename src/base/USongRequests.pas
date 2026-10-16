@@ -55,6 +55,8 @@ type
     Enabled:        boolean;
     Port:           integer;
     Host:           UTF8String; // address shown in the QR code, empty = autodetect
+    PublicURL:      UTF8String; // full address shown in the QR code instead, e.g.
+                                // https://name.example.org behind an HTTPS proxy
     AllowRemote:    boolean;    // accept clients outside of private networks
     QRTimeout:      integer;    // seconds, 0 = until the key is pressed again
     AdminPin:       UTF8String;
@@ -719,6 +721,7 @@ begin
     fConfig.Enabled := SameText(IniFile.ReadString(INI_SECTION, 'Enabled', 'Off'), 'On');
     fConfig.Port := IniFile.ReadInteger(INI_SECTION, 'Port', 8080);
     fConfig.Host := Trim(IniFile.ReadString(INI_SECTION, 'Host', ''));
+    fConfig.PublicURL := Trim(IniFile.ReadString(INI_SECTION, 'PublicURL', ''));
     fConfig.AllowRemote := SameText(IniFile.ReadString(INI_SECTION, 'AllowRemote', 'Off'), 'On');
     fConfig.QRTimeout := IniFile.ReadInteger(INI_SECTION, 'QRTimeout', 30);
     fConfig.AdminPin := Trim(IniFile.ReadString(INI_SECTION, 'AdminPin', ''));
