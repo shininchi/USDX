@@ -578,6 +578,9 @@ begin
         else
           SendError(AResponse, 404, 'not_found');
       end
+      else if (Pos('/api/icon/', URLPath) = 1) and (Method = 'GET') then
+        SendFile(AResponse, SongRequests.IconFile(Copy(URLPath, Length('/api/icon/') + 1, MaxInt)),
+          'public, max-age=3600')
       else if (URLPath = '/api/queue') and (Method = 'GET') then
         SendJSON(AResponse, 200, SongRequests.QueueJSON(UserId))
       else if (URLPath = '/api/request') and (Method = 'POST') then

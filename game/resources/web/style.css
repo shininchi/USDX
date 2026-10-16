@@ -421,6 +421,19 @@ main { padding: 12px 14px 80px; }
 .detail h2 { margin: 0; font-size: 20px; }
 .detail .artist { color: var(--muted); margin-bottom: 8px; }
 .detail .listen { margin: 4px 0 10px; }
+.song-icons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.song-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 4px;
+  border-radius: 999px;
+  background: #fff;
+  color: #1b1d36;
+  font-size: 12px;
+  font-weight: 600;
+}
+.song-icon img { width: 20px; height: 20px; display: block; }
 .cover-video {
   position: absolute;
   inset: 0;

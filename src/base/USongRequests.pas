@@ -86,6 +86,8 @@ type
     PreviewStart: real;    // seconds, -1 = not set in the song file
     StartSec:  real;       // #START in seconds
     FinishSec: real;       // #END in seconds, 0 = end of the audio
+    Medley:    integer;    // 0 = none, 1 = calculated, 2 = from #MEDLEY tags
+    Rap:       boolean;
     Search:    UTF8String; // lower case ASCII "artist title" for searching
   end;
 
@@ -160,6 +162,8 @@ type
       fDirty:         boolean;
       fVersion:       integer; // grows with every change of the state
       fGameNick:      UTF8String; // shown for requests added in the game
+      fIconFiles:     TStringList; // song icon name = file of the current skin
+      fIconTicks:     integer;
       fLastSave:      TDateTime;
 
       // catalog snapshot
@@ -203,6 +207,7 @@ type
 
       function NextClipJob(out Target, Video: UTF8String; out Start: double): boolean;
       procedure ClipDone(const Target: UTF8String; Success: boolean);
+      procedure UpdateIcons;
       procedure LoadConfig;
       procedure LoadState;
       procedure SaveState;
@@ -247,6 +252,7 @@ type
       function WithdrawVote(const UserId: UTF8String; Id: integer): UTF8String;
       function CoverFile(Id: integer; Thumbnail: boolean): UTF8String;
       function AudioFile(Id: integer): UTF8String;
+      function IconFile(const Name: UTF8String): UTF8String;
       {* Returns the path of a short muted preview clip of the song's video.
        * Status is 200 when the clip is ready, 202 while it is being made and
        * 404 when there is none. *}
@@ -622,6 +628,7 @@ begin
   fStateFile := Platform.GetGameUserPath.Append('SongRequests.json');
   fThumbDir := Platform.GetGameUserPath.Append('cache').Append('request-covers');
   fClipDir := Platform.GetGameUserPath.Append('cache').Append('request-videos');
+  fIconFiles := TStringList.Create;
   fClipJobs := TStringList.Create;
   fClipFailed := TStringList.Create;
   fClipEvent := TEvent.Create(nil, false, false, '');
@@ -659,6 +666,7 @@ begin
   fClipEvent.Free;
   fClipJobs.Free;
   fClipFailed.Free;
+  fIconFiles.Free;
   if fDirty then
     SaveState;
   fQueue.Free;
@@ -1079,6 +1087,13 @@ begin
       fSongs[I].PreviewStart := -1;
     fSongs[I].StartSec := Song.Start;
     fSongs[I].FinishSec := Song.Finish / 1000;
+    case Song.Medley.Source of
+      msTag:        fSongs[I].Medley := 2;
+      msCalculated: fSongs[I].Medley := 1;
+    else
+      fSongs[I].Medley := 0;
+    end;
+    fSongs[I].Rap := Song.hasRap;
     fSongs[I].Search := Song.ArtistASCII + ' ' + Song.TitleASCII;
     fKeyIndex.AddObject(fSongs[I].Key, TObject(PtrInt(I)));
   end;
@@ -1237,12 +1252,58 @@ end;
 
 { main thread }
 
+{* Song icons come from the current skin, which can change in the options;
+ * the paths are looked up in the main thread now and then. *}
+procedure TSongRequests.UpdateIcons;
+const
+  NAMES: array[0..4] of string = ('video', 'duet', 'medley', 'calcmedley', 'rap');
+var
+  Files: TStringList;
+  I:     integer;
+  Path:  IPath;
+begin
+  Files := TStringList.Create;
+  try
+    for I := Low(NAMES) to High(NAMES) do
+    begin
+      Path := Skin.GetTextureFileName('icon_song_' + NAMES[I]);
+      if Path.IsSet and Path.IsFile then
+        Files.Values[NAMES[I]] := Path.ToNative;
+    end;
+    fLock.Enter;
+    try
+      fIconFiles.Assign(Files);
+    finally
+      fLock.Leave;
+    end;
+  finally
+    Files.Free;
+  end;
+end;
+
+function TSongRequests.IconFile(const Name: UTF8String): UTF8String;
+begin
+  fLock.Enter;
+  try
+    Result := fIconFiles.Values[Name];
+  finally
+    fLock.Leave;
+  end;
+end;
+
 procedure TSongRequests.Tick;
 var
   Color: TRGB;
 begin
   if (Songs = nil) or Songs.Processing then
     Exit;
+
+  if fIconTicks <= 0 then
+  begin
+    UpdateIcons;
+    fIconTicks := 300; // frames
+  end;
+  Dec(fIconTicks);
 
   Color := GetSystemColor(Skin.Color);
   fLock.Enter;
@@ -1431,6 +1492,13 @@ begin
     Result.Add('video', HasVideo);
     Result.Add('cover', CoverFile <> '');
     Result.Add('audio', AudioFile <> '');
+    case Medley of
+      2: Result.Add('medley', 'tag');
+      1: Result.Add('medley', 'calc');
+    else
+      Result.Add('medley', '');
+    end;
+    Result.Add('rap', Rap);
     Result.Add('clip', (VideoFile <> '') and (fFFmpeg <> ''));
     Result.Add('clipStart', ClipStartOf(fSongs[Index]));
     Result.Add('previewStart', PreviewStart);

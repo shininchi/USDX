@@ -347,8 +347,18 @@ async function openSong(id, primed = null) {
     : el('p', { class: 'summary', text: t('no_scores') });
 
   const tags = el('div', { class: 'tags' },
-    [song.language, song.genre, song.year || '', song.edition, song.duet ? t('duet') : '', song.video ? t('video') : '']
+    [song.language, song.genre, song.year || '', song.edition]
       .filter(Boolean).map(text => el('span', { class: 'tag', text })));
+
+  // the same icons the game shows for the song, taken from its theme
+  const icons = [
+    ['video', song.video, t('video')],
+    ['duet', song.duet, t('duet')],
+    [song.medley === 'calc' ? 'calcmedley' : 'medley', !!song.medley, t('medley')],
+    ['rap', song.rap, t('rap')],
+  ].filter(([, show]) => show).map(([name, , label]) =>
+    el('span', { class: 'song-icon' }, el('img', { src: `/api/icon/${name}`, alt: '' }), label));
+  const iconRow = icons.length ? el('div', { class: 'song-icons' }, icons) : null;
 
   const row = el('div', { class: 'request-row' });
   let close;
@@ -388,6 +398,7 @@ async function openSong(id, primed = null) {
     cover,
     el('h2', { text: song.title }),
     el('div', { class: 'artist', text: song.artist }),
+    iconRow,
     listen,
     tags,
     stats,
