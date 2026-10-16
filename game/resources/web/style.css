@@ -5,8 +5,8 @@
   --line: #2f3360;
   --text: #f2f3ff;
   --muted: #a3a8d6;
-  --accent: #ff4fa3;
-  --accent-2: #6c7bff;
+  --accent: #47aff7;
+  --accent-2: #a9d3f9;
   --ok: #3ad29f;
   --warn: #ffb547;
   --danger: #ff5a6e;
@@ -42,7 +42,8 @@ button:disabled { opacity: .5; cursor: default; }
 
 .btn-primary {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  font-weight: 600;
+  color: #0b0c1a;
+  font-weight: 700;
 }
 
 .btn-danger { background: var(--danger); }
@@ -122,7 +123,7 @@ header.top {
   padding: 0 6px;
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: #0b0c1a;
   font-size: 12px;
   font-weight: 700;
   margin-left: 4px;
@@ -211,7 +212,7 @@ main { padding: 12px 14px 80px; }
   top: 6px;
   right: 6px;
   background: var(--accent);
-  color: #fff;
+  color: #0b0c1a;
   font-size: 11px;
   font-weight: 700;
   border-radius: 999px;

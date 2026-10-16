@@ -159,6 +159,8 @@ type
       fLastSung:      TStringList; // song key = unix time
       fRequestCounts: TStringList; // song key = number of requests ever
 
+      fAccent:        UTF8String; // theme color as #rrggbb for the web client
+
       // last new request, shown in the game
       fNewRequestSeq:  integer;
       fNewRequestText: UTF8String;
@@ -250,8 +252,11 @@ uses
   UIni,
   ULog,
   UPlatform,
+  UCommon,
+  USkins,
   USong,
   USongs,
+  UThemes,
   UUnicodeUtils;
 
 const
@@ -903,12 +908,16 @@ end;
 { main thread }
 
 procedure TSongRequests.Tick;
+var
+  Color: TRGB;
 begin
   if (Songs = nil) or Songs.Processing then
     Exit;
 
+  Color := GetSystemColor(Skin.Color);
   fLock.Enter;
   try
+    fAccent := Format('#%.2x%.2x%.2x', [Round(Color.R * 255), Round(Color.G * 255), Round(Color.B * 255)]);
     if Songs.SongList.Count <> fCatalogCount then
       RebuildCatalog;
     if fDirty and (SecondsBetween(NowUTC, fLastSave) >= SAVE_INTERVAL_SEC) then
@@ -1117,6 +1126,7 @@ begin
     Decades.Sort;
 
     Root.Add('total', fKeyIndex.Count);
+    Root.Add('accent', fAccent);
     Root.Add('loading', fCatalogCount < 0);
     Root.Add('paused', fSettings.Paused);
     Root.Add('maxPending', fSettings.MaxPendingPerUser);

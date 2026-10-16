@@ -219,3 +219,14 @@ function storageGet(key, fallback) {
 function storageSet(key, value) {
   try { localStorage.setItem(key, value); } catch (e) { /* private mode */ }
 }
+
+// Uses the color of the game's theme for highlights. The second color is the
+// lighter variant the game uses as well (square root of each channel).
+function applyAccent(hex) {
+  if (!/^#[0-9a-f]{6}$/i.test(hex || '')) return;
+  const channels = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const light = '#' + channels.map(c => Math.round(Math.sqrt(c) * 255).toString(16).padStart(2, '0')).join('');
+  const root = document.documentElement.style;
+  root.setProperty('--accent', hex);
+  root.setProperty('--accent-2', light);
+}

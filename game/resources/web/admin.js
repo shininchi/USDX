@@ -177,6 +177,7 @@ function start() {
     });
   });
 
+  api('/api/info').then(info => applyAccent(info.accent)).catch(() => {});
   refresh(true);
 }
 

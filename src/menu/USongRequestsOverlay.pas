@@ -67,14 +67,18 @@ uses
   UScreenSong,
   USongRequests,
   USongRequestsServer,
+  USkins,
   USongs,
-  UText;
+  UText,
+  UThemes,
+  UCommon;
 
 const
   FADE_MS   = 250;
   PULSE_MS  = 1500;
   NOTICE_MS = 4000;
-  BOTTOM_MARGIN = 44; // keeps the help bar at the bottom of the screen visible
+  ROW_OFFSET = 96;   // the badge and notices sit this far above the screen bottom,
+                     // clear of the theme's help bar
 
 var
   Visible:   boolean;
@@ -88,6 +92,7 @@ var
   PulseStart:  cardinal;     // SDL ticks of the last new request
   LastJumpKey: UTF8String;   // song key of the last request jumped to
   NoticeText:  UTF8String;   // message shown below the song list
+  BadgeLeft:   single;       // left edge of the badge, notices stay left of it
   NoticeStart: cardinal;
 
 function OverlayAllowed: boolean;
@@ -173,6 +178,7 @@ var
   Remaining: single;
   Text:      UTF8String;
   DepthTest: boolean;
+  Accent:    TRGB;
 begin
   if not Visible then
     Exit;
@@ -258,9 +264,10 @@ begin
   // remaining time
   if (SongRequests.Config.QRTimeout > 0) and (HiddenAt = 0) then
   begin
+    Accent := GetSystemColor(Skin.Color);
     Remaining := 1 - (Ticks - ShownAt) / (SongRequests.Config.QRTimeout * 1000);
     Renderer.DrawQuad(PanelX, PanelY + PanelH - 4, 0, PanelW * Max(0, Remaining), 4,
-      0.4, 0.7, 1, Alpha);
+      Accent.R, Accent.G, Accent.B, Alpha);
   end;
 
   Renderer.DepthTest := DepthTest;
@@ -359,6 +366,7 @@ var
   NewText, Text: UTF8String;
   Pulse:     single;
   W, H, X, Y, Grow: single;
+  Accent:    TRGB;
   DepthTest: boolean;
 begin
   if (SongRequests = nil) or not SongRequests.Config.Enabled or
@@ -386,14 +394,15 @@ begin
   SetFontStyle(ftBold);
   SetFontItalic(false);
   SetFontSize(20);
-  Text := Format('%s: %d  -  %s', [Language.Translate('SONG_REQUESTS_BADGE'), Count,
-    Language.Translate('SONG_REQUESTS_BADGE_HINT')]);
+  Text := Format('%s: %d', [Language.Translate('SONG_REQUESTS_BADGE'), Count]);
 
   W := TextWidth(Text) + 24;
-  H := 30;
+  H := 32;
   // bottom right, above the theme's help bar; the top holds the logo
   X := RenderW - W - 16;
-  Y := RenderH - H - BOTTOM_MARGIN;
+  Y := RenderH - ROW_OFFSET;
+  BadgeLeft := X;
+  Accent := GetSystemColor(Skin.Color);
 
   Pulse := 0;
   if (PulseStart <> 0) and (Ticks - PulseStart < PULSE_MS) then
@@ -406,10 +415,10 @@ begin
   if Pulse > 0 then
   begin
     Grow := (1 - Pulse) * 14;
-    Renderer.DrawQuad(X - Grow, Y - Grow, 0, W + 2 * Grow, H + 2 * Grow, 1, 0.31, 0.64, 0.6 * Pulse);
+    Renderer.DrawQuad(X - Grow, Y - Grow, 0, W + 2 * Grow, H + 2 * Grow, Accent.R, Accent.G, Accent.B, 0.6 * Pulse);
   end;
   Renderer.DrawQuad(X, Y, 0, W, H, 0.05, 0.05, 0.1, 0.85);
-  Renderer.DrawQuad(X, Y, 0, 4, H, 1, 0.31, 0.64, 1);
+  Renderer.DrawQuad(X, Y, 0, 4, H, Accent.R, Accent.G, Accent.B, 1);
 
   SetFontColor(1, 1, 1, 1);
   SetFontPos(X + 14, Y + 4);
@@ -424,6 +433,7 @@ var
   Alpha:     single;
   W, H, X, Y: single;
   DepthTest: boolean;
+  Accent:    TRGB;
 begin
   if (NoticeText = '') or (Display.NextScreen <> nil) or (Display.CurrentScreen <> @ScreenSong) then
     Exit;
@@ -444,12 +454,16 @@ begin
   W := Min(TextWidth(NoticeText) + 32, RenderW - 40);
   H := 32;
   X := (RenderW - W) / 2;
-  Y := RenderH - H - BOTTOM_MARGIN - 42; // above the row of the badge
+  Y := RenderH - ROW_OFFSET; // same row as the badge
+  // keep clear of the badge when the text is long
+  if (SongRequests.PendingCount > 0) and (X + W > BadgeLeft - 8) then
+    X := Max(20, BadgeLeft - 8 - W);
+  Accent := GetSystemColor(Skin.Color);
 
   DepthTest := Renderer.DepthTest;
   Renderer.DepthTest := false;
   Renderer.DrawQuad(X, Y, 0, W, H, 0.05, 0.05, 0.1, 0.9 * Alpha);
-  Renderer.DrawQuad(X, Y + H - 3, 0, W, 3, 1, 0.31, 0.64, Alpha);
+  Renderer.DrawQuad(X, Y + H - 3, 0, W, 3, Accent.R, Accent.G, Accent.B, Alpha);
 
   SetFontColor(1, 1, 1, Alpha);
   SetFontPos(X + 16, Y + 5);

@@ -24,6 +24,7 @@ const $ = id => document.getElementById(id);
 
 async function loadInfo() {
   state.info = await api('/api/info');
+  applyAccent(state.info.accent);
   $('nickChip').textContent = state.info.me.nick ? `👤 ${state.info.me.nick}` : `👤 ${t('change_nick')}`;
   $('pausedNotice').classList.toggle('hidden', !state.info.paused);
   return state.info;
