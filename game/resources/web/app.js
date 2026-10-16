@@ -7,6 +7,7 @@ const PAGE_SIZE = 60;
 const state = {
   info: null,
   view: storageGet('sr.view', 'grid'),
+  autoplay: storageGet('sr.autoplay', '0') === '1',
   sort: storageGet('sr.sort', 'artist'),
   query: '',
   filters: { language: '', genre: '', decade: '', folder: '', duet: '-1', video: '-1' },
@@ -28,6 +29,21 @@ async function loadInfo() {
   $('nickChip').textContent = state.info.me.nick ? `👤 ${state.info.me.nick}` : `👤 ${t('change_nick')}`;
   $('pausedNotice').classList.toggle('hidden', !state.info.paused);
   return state.info;
+}
+
+function renderAutoplay() {
+  const chip = $('autoplayChip');
+  chip.textContent = `${state.autoplay ? '🔊' : '🔇'} ${t('autoplay')}`;
+  chip.classList.toggle('active', state.autoplay);
+  chip.setAttribute('aria-pressed', state.autoplay ? 'true' : 'false');
+  chip.title = t(state.autoplay ? 'autoplay_on' : 'autoplay_off');
+}
+
+function toggleAutoplay() {
+  state.autoplay = !state.autoplay;
+  storageSet('sr.autoplay', state.autoplay ? '1' : '0');
+  renderAutoplay();
+  toast(t(state.autoplay ? 'autoplay_on' : 'autoplay_off'));
 }
 
 function fillSelect(select, values, emptyLabel, extra = []) {
@@ -109,7 +125,7 @@ function songNode(song) {
     state.view === 'list' ? songTags(song) : null);
   // in the text view the artist goes first
   if (state.view === 'text') meta.prepend(meta.querySelector('.artist'));
-  return el('div', { class: 'song', onclick: () => openSong(song.id) }, cover, meta);
+  return el('div', { class: 'song', onclick: () => openSong(song.id, state.autoplay && song.audio ? primeAudio(song.id) : null) }, cover, meta);
 }
 
 async function loadSongs(reset) {
@@ -207,13 +223,24 @@ function previewStart(song, duration) {
   return start + offset;
 }
 
-function togglePreview(song, button) {
+// With autoplay the audio element is created and started (muted) in the tap
+// that opens the song, because browsers only allow sound that starts in a
+// tap; the details arrive later and take it over.
+function primeAudio(id) {
+  stopPreview();
+  const audio = new Audio(`/api/audio/${id}`);
+  audio.muted = true;
+  audio.play().catch(() => {});
+  return audio;
+}
+
+function togglePreview(song, button, primed) {
   if (preview.button === button) {
     stopPreview();
     return;
   }
-  stopPreview();
-  const audio = new Audio(`/api/audio/${song.id}`);
+  if (!primed) stopPreview();
+  const audio = primed || new Audio(`/api/audio/${song.id}`);
   preview.audio = audio;
   preview.button = button;
   button.textContent = `■ ${t('stop_listening')}`;
@@ -232,14 +259,17 @@ function togglePreview(song, button) {
       toast(t('err_audio_blocked'), 'error');
     }
   });
-  audio.addEventListener('loadedmetadata', () => {
+  const seekToPreview = () => {
     audio.addEventListener('seeked', () => {
       if (preview.audio !== audio) return;
       audio.muted = false;
       if (audio.paused) play();
     }, { once: true });
     audio.currentTime = previewStart(song, audio.duration || 0);
-  }, { once: true });
+  };
+  // a primed element may already know its length
+  if (audio.readyState >= 1) seekToPreview();
+  else audio.addEventListener('loadedmetadata', seekToPreview, { once: true });
   if (song.clip) audio.addEventListener('timeupdate', () => { if (preview.audio === audio) syncVideo(song, button); });
   audio.addEventListener('error', () => {
     if (preview.audio !== audio) return;
@@ -286,11 +316,12 @@ async function loadClip(song, cover, isOpen) {
 
 // ---------- song detail ----------
 
-async function openSong(id) {
+async function openSong(id, primed = null) {
   let song;
   try {
     song = await api(`/api/songs/${id}`);
   } catch (error) {
+    if (primed) primed.pause();
     toast(errorText(error), 'error');
     return;
   }
@@ -335,6 +366,9 @@ async function openSong(id) {
     ? el('button', { class: 'btn-ghost listen', text: `▶ ${t('listen')}` })
     : null;
   if (listen) listen.addEventListener('click', () => togglePreview(song, listen));
+  // autoplay: the primed audio becomes the preview right away
+  if (listen && primed) togglePreview(song, listen, primed);
+  else if (primed) primed.pause();
 
   const cover = coverNode(song, true);
   let open = true;
@@ -469,6 +503,8 @@ async function start() {
   $('tabSongs').addEventListener('click', () => setTab('songs'));
   $('tabQueue').addEventListener('click', () => setTab('queue'));
   $('nickChip').addEventListener('click', askNick);
+  $('autoplayChip').addEventListener('click', toggleAutoplay);
+  renderAutoplay();
 
   new IntersectionObserver(entries => {
     if (entries.some(e => e.isIntersecting)) loadSongs(false);

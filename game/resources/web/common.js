@@ -35,6 +35,8 @@ const TEXTS = {
     err_recently_sung: 'Esta canción se ha cantado hace poco.',
     err_limit: 'Ya tienes el máximo de peticiones pendientes.',
     err_not_found: 'Esa canción ya no está disponible.',
+    autoplay: 'Autoplay', autoplay_on: 'Al abrir una canción sonará sola con su vídeo.',
+    autoplay_off: 'Reproducción automática desactivada.',
     err_audio_blocked: 'El navegador no deja reproducir el audio. Vuelve a pulsar Escuchar.',
     err_network: 'No hay conexión con el juego.', err_generic: 'Algo ha fallado.',
     // admin
@@ -100,6 +102,8 @@ const TEXTS = {
     err_recently_sung: 'This song was sung recently.',
     err_limit: 'You reached the maximum of pending requests.',
     err_not_found: 'That song is no longer available.',
+    autoplay: 'Autoplay', autoplay_on: 'Opening a song plays it with its video.',
+    autoplay_off: 'Autoplay is off.',
     err_audio_blocked: 'The browser blocked the audio. Press Listen again.',
     err_network: 'Cannot reach the game.', err_generic: 'Something went wrong.',
     admin_title: 'Admin · Requests', admin_pin: 'Admin PIN', login: 'Log in',
