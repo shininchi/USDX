@@ -438,7 +438,7 @@ function togglePreview(song, button, primed) {
 // Asks the game for the preview clip, waiting while ffmpeg makes it, and
 // fades the cover into the muted video once it plays.
 async function loadClip(song, cover, isOpen) {
-  for (let attempt = 0; attempt < 30 && isOpen(); attempt++) {
+  for (let attempt = 0; attempt < 60 && isOpen(); attempt++) {
     let response;
     try {
       response = await fetch(`/api/video/${song.id}`, { headers: { Range: 'bytes=0-0' } });
@@ -446,13 +446,13 @@ async function loadClip(song, cover, isOpen) {
       return;
     }
     if (response.status === 202) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1000));
       continue;
     }
     if (!response.ok || !isOpen()) return;
     const video = el('video', { class: 'cover-video', muted: true, playsinline: true, loop: true, autoplay: true, preload: 'auto' });
     video.muted = true; // the attribute alone is not enough for autoplay in Safari
-    video.addEventListener('playing', () => setTimeout(() => video.classList.add('visible'), 1000), { once: true });
+    video.addEventListener('playing', () => setTimeout(() => video.classList.add('visible'), 200), { once: true });
     video.src = `/api/video/${song.id}`;
     cover.append(video);
     video.play().catch(() => {});

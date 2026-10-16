@@ -456,7 +456,7 @@ main { padding: 12px 14px 80px; }
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity 1.2s ease;
+  transition: opacity .6s ease;
 }
 .cover-video.visible { opacity: 1; }
 .detail .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
