@@ -404,7 +404,7 @@ async function openSong(id, primed = null) {
 
 function queueNode(item) {
   const vote = item.voted
-    ? el('button', { class: 'btn-ghost vote-btn', title: t('withdraw'), 'aria-label': t('withdraw'), text: '−1', onclick: () => queueVote(item, '/api/unvote', t('withdraw_ok')) })
+    ? el('button', { class: 'btn-danger vote-btn', title: t('withdraw'), 'aria-label': t('withdraw'), text: '−1', onclick: () => queueVote(item, '/api/unvote', t('withdraw_ok')) })
     : el('button', { class: 'btn-primary vote-btn', title: t('vote', item.position), 'aria-label': t('vote', item.position), text: '+1', onclick: () => queueVote(item, '/api/request', t('vote_ok')) });
   return el('div', { class: `queue-item${item.voted ? ' mine' : ''}` },
     el('div', { class: 'pos' }, item.pinned ? el('span', { class: 'pin', title: t('pinned'), text: '📌' }) : item.position),
