@@ -212,6 +212,7 @@ uses
   UParty,
   UPathUtils,
   USong,
+  USongRequests,
   UUnicodeUtils,
   UWebcam,
   UWebSDK,
@@ -1603,6 +1604,10 @@ begin
   AudioInput.CaptureStop;
   AudioPlayback.Stop;
   AudioPlayback.SetSyncSource(nil);
+
+  // a requested song leaves the request queue once it was sung
+  if SungToEnd and (SongRequests <> nil) then
+    SongRequests.MarkSung(CurrentSong.Artist, CurrentSong.Title);
 
   if (ScreenSong.Mode = smNormal) and SungToEnd then
   begin

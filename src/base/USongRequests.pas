@@ -114,6 +114,15 @@ type
     function Priority: integer;
   end;
 
+  TSRQueueEntry = record
+    Key:    UTF8String;
+    Artist: UTF8String;
+    Title:  UTF8String;
+    By:     UTF8String; // nicknames of everybody who requested it
+    Votes:  integer;
+  end;
+  TSRQueueEntries = array of TSRQueueEntry;
+
   TSRUser = class
     Id:            UTF8String;
     Nick:          UTF8String;
@@ -149,6 +158,10 @@ type
       fBlockedIPs:    TStringList;
       fLastSung:      TStringList; // song key = unix time
       fRequestCounts: TStringList; // song key = number of requests ever
+
+      // last new request, shown in the game
+      fNewRequestSeq:  integer;
+      fNewRequestText: UTF8String;
 
       // admin login protection
       fAdminSessions: TStringList; // session tokens
@@ -205,6 +218,10 @@ type
 
       // game API (main thread)
       procedure MarkSung(const Artist, Title: UTF8String);
+      function QueueSnapshot: TSRQueueEntries;
+      {* Returns a number that grows with every new request (not with votes)
+       * and the description of the latest one. *}
+      function NewRequestSeq(out Text: UTF8String): integer;
 
       property Config: TSongRequestsConfig read fConfig;
       property PendingCount: integer read GetPendingCount;
@@ -920,6 +937,49 @@ begin
   end;
 end;
 
+function TSongRequests.QueueSnapshot: TSRQueueEntries;
+var
+  I, J:    integer;
+  Request: TSRRequest;
+  User:    TSRUser;
+begin
+  fLock.Enter;
+  try
+    SetLength(Result, fQueue.Count);
+    for I := 0 to fQueue.Count - 1 do
+    begin
+      Request := TSRRequest(fQueue[I]);
+      Result[I].Key := Request.Key;
+      Result[I].Artist := Request.Artist;
+      Result[I].Title := Request.Title;
+      Result[I].Votes := Request.Voters.Count;
+      Result[I].By := '';
+      for J := 0 to Request.Voters.Count - 1 do
+      begin
+        User := FindUser(Request.Voters[J]);
+        if User = nil then
+          Continue;
+        if Result[I].By <> '' then
+          Result[I].By := Result[I].By + ', ';
+        Result[I].By := Result[I].By + User.Nick;
+      end;
+    end;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.NewRequestSeq(out Text: UTF8String): integer;
+begin
+  fLock.Enter;
+  try
+    Result := fNewRequestSeq;
+    Text := fNewRequestText;
+  finally
+    fLock.Leave;
+  end;
+end;
+
 { JSON helpers }
 
 function TSongRequests.SongToJSON(Index: integer; const UserId: UTF8String): TJSONObject;
@@ -1438,6 +1498,8 @@ begin
       Request.Title := fSongs[Id].Title;
       Request.FirstAt := NowUTC;
       fQueue.Add(Request);
+      Inc(fNewRequestSeq);
+      fNewRequestText := Request.Artist + ' - ' + Request.Title + ' (' + User.Nick + ')';
     end;
 
     Request.Voters.Add(UserId);

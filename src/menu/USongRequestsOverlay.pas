@@ -23,9 +23,13 @@
 unit USongRequestsOverlay;
 
 {*
- * QR code with the address of the song request web client. It is hidden by
- * default and toggled with the I key on menu screens. It hides itself after
- * Config.QRTimeout seconds so it does not burn into OLED screens.
+ * In-game parts of the song request system:
+ * - QR code with the address of the web client. It is hidden by default and
+ *   toggled with the I key on menu screens. It hides itself after
+ *   Config.QRTimeout seconds so it does not burn into OLED screens.
+ * - Badge with the number of pending requests on the song selection screen,
+ *   which pulses when a new request arrives.
+ * - Jumping to the requested songs from the song selection screen.
  *}
 
 interface
@@ -45,6 +49,10 @@ procedure SongRequestsDrawOverlay;
 {* Hides the QR code immediately. *}
 procedure SongRequestsHideQR;
 
+{* Selects the next request in queue order on the song selection screen, or a
+ * random one. *}
+procedure SongRequestsJump(RandomPick: boolean);
+
 implementation
 
 uses
@@ -56,12 +64,15 @@ uses
   UGraphic,
   ULanguage,
   URenderer,
+  UScreenSong,
   USongRequests,
   USongRequestsServer,
+  USongs,
   UText;
 
 const
-  FADE_MS = 250;
+  FADE_MS  = 250;
+  PULSE_MS = 1500;
 
 var
   Visible:   boolean;
@@ -70,6 +81,10 @@ var
   URL:       UTF8String;
   QRSize:    integer;
   QRModules: array of boolean;
+
+  LastSeenSeq: integer = -1; // NewRequestSeq that was already announced
+  PulseStart:  cardinal;     // SDL ticks of the last new request
+  LastJumpKey: UTF8String;   // song key of the last request jumped to
 
 function OverlayAllowed: boolean;
 begin
@@ -144,7 +159,7 @@ begin
   Result := true;
 end;
 
-procedure SongRequestsDrawOverlay;
+procedure DrawQR;
 var
   Ticks:       cardinal;
   Alpha:     single;
@@ -245,6 +260,154 @@ begin
   end;
 
   Renderer.DepthTest := DepthTest;
+end;
+
+function FindCatSong(const Key: UTF8String): integer;
+var
+  I: integer;
+begin
+  for I := 0 to High(CatSongs.Song) do
+    if (not CatSongs.Song[I].Main) and
+       (SongRequestKey(CatSongs.Song[I].Artist, CatSongs.Song[I].Title) = Key) then
+    begin
+      Result := I;
+      Exit;
+    end;
+  Result := -1;
+end;
+
+procedure SongRequestsJump(RandomPick: boolean);
+var
+  Entries: TSRQueueEntries;
+  Order:   array of integer;
+  I, J, T, Start, Target: integer;
+  Entry:   TSRQueueEntry;
+  By:      UTF8String;
+begin
+  if (SongRequests = nil) or not SongRequests.Config.Enabled then
+    Exit;
+
+  Entries := SongRequests.QueueSnapshot;
+  SetLength(Order, Length(Entries));
+  for I := 0 to High(Order) do
+    Order[I] := I;
+
+  // start after the request selected last time
+  Start := 0;
+  for I := 0 to High(Entries) do
+    if Entries[I].Key = LastJumpKey then
+      Start := I + 1;
+
+  if RandomPick then
+  begin
+    for I := High(Order) downto 1 do
+    begin
+      J := Random(I + 1);
+      T := Order[I];
+      Order[I] := Order[J];
+      Order[J] := T;
+    end;
+    // avoid picking the same song again
+    if (Length(Order) > 1) and (Entries[Order[0]].Key = LastJumpKey) then
+    begin
+      T := Order[0];
+      Order[0] := Order[High(Order)];
+      Order[High(Order)] := T;
+    end;
+    Start := 0;
+  end;
+
+  for I := 0 to High(Order) do
+  begin
+    J := Order[(Start + I) mod Length(Order)];
+    Entry := Entries[J];
+    Target := FindCatSong(Entry.Key);
+    if Target < 0 then
+      Continue; // not in the library any more
+
+    ScreenSong.SelectCatSong(Target);
+    LastJumpKey := Entry.Key;
+
+    By := Entry.By;
+    if Length(By) > 30 then
+      By := Copy(By, 1, 27) + '...';
+    ScreenSong.WriteMessage(Format('%s %d/%d: %s - %s (%s)',
+      [Language.Translate('SONG_REQUESTS_REQUEST'), J + 1, Length(Entries),
+       Entry.Artist, Entry.Title, By]));
+    Exit;
+  end;
+
+  ScreenSong.WriteMessage(Language.Translate('SONG_REQUESTS_EMPTY'));
+end;
+
+procedure DrawBadge;
+var
+  Ticks:     cardinal;
+  Seq, Count: integer;
+  NewText, Text: UTF8String;
+  Pulse:     single;
+  W, H, X, Y, Grow: single;
+  DepthTest: boolean;
+begin
+  if (SongRequests = nil) or not SongRequests.Config.Enabled or
+     (Display.NextScreen <> nil) or (Display.CurrentScreen <> @ScreenSong) then
+    Exit;
+
+  Ticks := SDL_GetTicks;
+
+  // announce new requests once, also those that arrived while singing
+  Seq := SongRequests.NewRequestSeq(NewText);
+  if LastSeenSeq < 0 then
+    LastSeenSeq := Seq
+  else if Seq <> LastSeenSeq then
+  begin
+    LastSeenSeq := Seq;
+    PulseStart := Ticks;
+    ScreenSong.WriteMessage(Language.Translate('SONG_REQUESTS_NEW') + ': ' + NewText);
+  end;
+
+  Count := SongRequests.PendingCount;
+  if Count = 0 then
+    Exit;
+
+  SetFontFamily(0);
+  SetFontStyle(ftBold);
+  SetFontItalic(false);
+  SetFontSize(20);
+  Text := Format('%s: %d  [N]', [Language.Translate('SONG_REQUESTS_BADGE'), Count]);
+
+  W := TextWidth(Text) + 24;
+  H := 30;
+  X := RenderW - W - 16;
+  Y := 12;
+
+  Pulse := 0;
+  if (PulseStart <> 0) and (Ticks - PulseStart < PULSE_MS) then
+    Pulse := 1 - (Ticks - PulseStart) / PULSE_MS;
+
+  DepthTest := Renderer.DepthTest;
+  Renderer.DepthTest := false;
+
+  // glow that grows and fades out after a new request
+  if Pulse > 0 then
+  begin
+    Grow := (1 - Pulse) * 14;
+    Renderer.DrawQuad(X - Grow, Y - Grow, 0, W + 2 * Grow, H + 2 * Grow, 1, 0.31, 0.64, 0.6 * Pulse);
+  end;
+  Renderer.DrawQuad(X, Y, 0, W, H, 0.05, 0.05, 0.1, 0.85);
+  Renderer.DrawQuad(X, Y, 0, 4, H, 1, 0.31, 0.64, 1);
+
+  SetFontColor(1, 1, 1, 1);
+  SetFontPos(X + 14, Y + 4);
+  PrintText(Text);
+
+  Renderer.DepthTest := DepthTest;
+end;
+
+procedure SongRequestsDrawOverlay;
+begin
+  DrawBadge;
+  DrawQR;
 end;
 
 end.

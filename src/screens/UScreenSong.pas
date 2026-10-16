@@ -281,6 +281,7 @@ type
 
       //Party Mode
       procedure SelectRandomSong;
+      procedure SelectCatSong(Target: integer); // selects CatSongs.Song[Target] in any category
       procedure SetJoker;
       procedure SetStatics;
       procedure FilterDuetsInPartyMode;
@@ -340,6 +341,7 @@ uses
   UPlaylist,
   UScreenSongMenu,
   USkins,
+  USongRequestsOverlay,
   UUnicodeUtils,
   Math;
 
@@ -1065,6 +1067,13 @@ begin
 
             SetScrollRefresh;
           end;
+          Exit;
+        end;
+
+      SDLK_N: // jump to the next song request, shift: random request
+        begin
+          if (Songs.SongList.Count > 0) and FreeListMode then
+            SongRequestsJump((SDL_ModState and (KMOD_LSHIFT + KMOD_RSHIFT)) <> 0);
           Exit;
         end;
 
@@ -3867,6 +3876,44 @@ begin
     FixSelected;
     OnSongSelect;
   end;
+end;
+
+procedure TScreenSong.SelectCatSong(Target: integer);
+var
+  Cat: integer;
+begin
+  if (Target < 0) or (Target > High(CatSongs.Song)) or CatSongs.Song[Target].Main then
+    Exit;
+
+  OnSongDeSelect;
+
+  // leave the search and playlist views, the song may not be part of them
+  if (CatSongs.CatNumShow < -1) then
+  begin
+    CatSongs.SetFilter('', fltAll);
+    PlaylistMan.UnsetPlaylist;
+    HideCatTL;
+    ChessboardMinLine := MainChessboardMinLine;
+    ListMinLine := MainListMinLine;
+  end;
+
+  // open the category of the song
+  if (Ini.Tabs = 1) then
+  begin
+    Cat := Target;
+    while (Cat > 0) and not CatSongs.Song[Cat].Main do
+      Dec(Cat);
+    CatSongs.ShowCategoryList;
+    ShowCatTL(Cat);
+    CatSongs.ClickCategoryButton(Cat);
+    SelectNext;
+  end;
+
+  if CatSongs.Song[Target].Visible then
+    SkipTo(CatSongs.VisibleIndex(Target), Target, CatSongs.VisibleSongs);
+
+  AudioPlayback.PlaySound(SoundLib.Change);
+  SetScrollRefresh;
 end;
 
 procedure TScreenSong.SelectRandomSong;
