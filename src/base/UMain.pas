@@ -103,6 +103,7 @@ uses
   USongRequests,
   USongRequestsOverlay,
   USongRequestsServer,
+  USongGenerator,
   UTime,
   UWebcam;
   //UVideoAcinerella;
@@ -270,6 +271,9 @@ begin
     Log.LogStatus('Stopping Song Requests', 'Finalization');
     StopSongRequests;
 
+    Log.LogStatus('Stopping Song Generator', 'Finalization');
+    StopSongGenerator;
+
     Log.LogStatus('Closing DB file', 'Finalization');
     if (DataBase <> nil) then
     begin
@@ -334,6 +338,8 @@ begin
 
       if (SongRequests <> nil) then
         SongRequests.Tick;
+      if (SongGenerator <> nil) then
+        SongGenerator.Tick;
 
       // display
       Done := not Display.Draw;
@@ -507,6 +513,15 @@ begin
           SDL_WINDOWEVENT_RESIZED: OnWindowResized(Event.window.data1, Event.window.data2);
         end
       end;
+      SDL_DROPFILE:
+        begin
+          // only enabled while the song generator screen is shown
+          if Event.drop._file <> nil then
+          begin
+            SongGeneratorDroppedFile := UTF8String(Event.drop._file);
+            SDL_free(Event.drop._file);
+          end;
+        end;
       SDL_KEYDOWN, SDL_TEXTINPUT:
         begin
           // translate CTRL-A (ASCII 1) - CTRL-Z (ASCII 26) to correct charcodes.

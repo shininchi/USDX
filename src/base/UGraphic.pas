@@ -73,6 +73,7 @@ uses
   UScreenEditSub,
   UScreenEdit,
   UScreenEditConvert,
+  UScreenEditGenerate,
   UScreenOpen,
   UScreenAbout,
   USkins,
@@ -164,6 +165,7 @@ var
   ScreenEditSub:      TScreenEditSub;
   ScreenEdit:         TScreenEdit;
   ScreenEditConvert:  TScreenEditConvert;
+  ScreenEditGenerate: TScreenEditGenerate;
   ScreenOpen:         TScreenOpen;
   ScreenAbout:        TScreenAbout;
 
@@ -1053,6 +1055,7 @@ begin
   ScreenOptionsSongRequests := TScreenOptionsSongRequests.Create;
   SetLoadingTitle('Loading ScreenEditConvert & ScreenEditSub & ScreenEdit');
   ScreenEditConvert :=      TScreenEditConvert.Create;
+  ScreenEditGenerate :=     TScreenEditGenerate.Create;
   ScreenEditSub :=          TScreenEditSub.Create;
   ScreenEdit :=             TScreenEdit.Create;
   SetLoadingTitle('Loading ScreenOpen');
@@ -1120,6 +1123,7 @@ begin
   FreeAndNil(ScreenEditSub);
   FreeAndNil(ScreenEdit);
   FreeAndNil(ScreenEditConvert);
+  FreeAndNil(ScreenEditGenerate);
   FreeAndNil(ScreenJukebox);
   FreeAndNil(ScreenJukeboxOptions);
   FreeAndNil(ScreenJukeboxPlaylist);

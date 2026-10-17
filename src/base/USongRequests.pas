@@ -310,6 +310,8 @@ var
 
 function SongRequestKey(const Artist, Title: UTF8String): UTF8String;
 function GetLocalIPAddress: UTF8String;
+// ffmpeg executable: the configured one, or a usual install place, or the PATH
+function FindFFmpeg(const Configured: UTF8String): UTF8String;
 
 implementation
 

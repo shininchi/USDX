@@ -349,6 +349,17 @@ begin
   Resume();
 end;
 
+{* plain lyrics next to a song, used by the song generator (USongGenerator),
+   not songs themselves *}
+function IsLyricsFile(const FileName: UTF8String): boolean;
+var
+  Name: UTF8String;
+begin
+  Name := LowerCase(FileName);
+  Result := (Name = 'letra.txt') or (Name = 'lyrics.txt') or
+            (Copy(Name, Length(Name) - 10, 11) = '.lyrics.txt');
+end;
+
 procedure TSongs.FindFilesByExtension(const Dir: IPath; const Ext: IPath; Recursive: Boolean; var Files: TPathDynArray);
 var
   DirList: TPathDynArray;
@@ -372,7 +383,8 @@ begin
     begin
       FileInfo := Iter.Next;
       FileName := FileInfo.Name;
-      if ((FileInfo.Attr and faDirectory) = 0) and Ext.Equals(FileName.GetExtension(), true) then
+      if ((FileInfo.Attr and faDirectory) = 0) and Ext.Equals(FileName.GetExtension(), true) and
+         not IsLyricsFile(FileName.ToUTF8) then
       begin
         Log.LogDebug('Found file ' + DirList[DirIndex].Append(FileName).ToWide, 'TSongs.FindFilesByExtension');
         SetLength(Files, Length(Files) + 1);

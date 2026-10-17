@@ -720,6 +720,7 @@ type
 
   TThemeEdit = class(TThemeBasic)
     ButtonConvert:        TThemeButton;
+    ButtonGenerate:       TThemeButton;
     ButtonExit:           TThemeButton;
 
     TextDescription:      TThemeText;
@@ -1824,10 +1825,12 @@ begin
       ThemeLoadBasic (Edit,               'Edit');
 
       ThemeLoadButton(Edit.ButtonConvert, 'EditButtonConvert');
+      ThemeLoadButton(Edit.ButtonGenerate, 'EditButtonGenerate');
       ThemeLoadButton(Edit.ButtonExit,    'EditButtonExit');
 
       Edit.Description[0] := Language.Translate('SING_EDIT_BUTTON_DESCRIPTION_CONVERT');
-      Edit.Description[1] := Language.Translate('SING_EDIT_BUTTON_DESCRIPTION_EXIT');
+      Edit.Description[1] := Language.Translate('SING_EDIT_BUTTON_DESCRIPTION_GENERATE');
+      Edit.Description[2] := Language.Translate('SING_EDIT_BUTTON_DESCRIPTION_EXIT');
 
       ThemeLoadText(Edit.TextDescription, 'EditTextDescription');
       Edit.TextDescription.Text := Edit.Description[0];

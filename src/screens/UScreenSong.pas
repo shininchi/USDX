@@ -259,6 +259,7 @@ type
 
       procedure GenerateThumbnails();
       procedure SyncCoversToSongs();
+      procedure RefreshCovers();
       procedure OnShow; override;
       procedure OnShowFinish; override;
       procedure OnHide; override;
@@ -2152,6 +2153,19 @@ begin
     Button[B].Texture := CatSongs.Song[B].CoverTex.Clone();
     Button[B].Selected := False;
   end;
+end;
+
+{ after songs were added to the song list (generated songs): one cover
+  button per entry of CatSongs.Song }
+procedure TScreenSong.RefreshCovers();
+var
+  I: integer;
+begin
+  // the buttons were reserved in one go, append the missing ones one by one
+  ButtonPos := -1;
+  for I := Length(Button) to High(CatSongs.Song) do
+    AddButton(300 + I*250, 140, 200, 200, PATH_NONE, TEXTURE_TYPE_PLAIN, Theme.Song.Cover.Reflections);
+  SyncCoversToSongs;
 end;
 
 { called when song flows movement stops at a song }

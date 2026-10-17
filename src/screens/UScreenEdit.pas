@@ -101,6 +101,12 @@ begin
 
           if Interaction = 1 then
           begin
+            AudioPlayback.PlaySound(SoundLib.Start);
+            FadeTo(@ScreenEditGenerate);
+          end;
+
+          if Interaction = 2 then
+          begin
             AudioPlayback.PlaySound(SoundLib.Back);
             FadeTo(@ScreenMain);
           end;
@@ -123,6 +129,7 @@ begin
   LoadFromTheme(Theme.Edit);
 
   AddButton(Theme.Edit.ButtonConvert);
+  AddButton(Theme.Edit.ButtonGenerate);
 { Some ideas for more:
   AddButton(Theme.Edit.ButtonEditHeaders);
   AddButton(Theme.Edit.ButtonAdjustGap);

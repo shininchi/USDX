@@ -70,3 +70,6 @@ ppaslink.sh
 /usdx-dlls-i686.zip
 /game/*.dll
 /game/*.debug
+
+# song generator scripts run in place during development
+__pycache__/
