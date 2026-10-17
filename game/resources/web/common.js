@@ -7,6 +7,7 @@ const LANG = (navigator.language || 'es').toLowerCase().startsWith('es') ? 'es' 
 const TEXTS = {
   es: {
     brand: 'Cancionero', page_title: 'UltraStar - Cancionero', tab_songs: 'Canciones', tab_queue: 'Cola',
+    lucky: 'Canción al azar', lucky_spinning: 'Girando…',
     search_placeholder: 'Buscar artista o canción…', filters: 'Filtros',
     sort_artist: 'Artista A–Z', sort_title: 'Título A–Z', sort_popular: 'Más cantadas',
     sort_requested: 'Más pedidas', sort_score: 'Mejor puntuación', sort_year: 'Más recientes',
@@ -74,6 +75,7 @@ const TEXTS = {
   },
   en: {
     brand: 'Songbook', page_title: 'UltraStar - Songbook', tab_songs: 'Songs', tab_queue: 'Queue',
+    lucky: 'Random song', lucky_spinning: 'Spinning…',
     search_placeholder: 'Search artist or song…', filters: 'Filters',
     sort_artist: 'Artist A–Z', sort_title: 'Title A–Z', sort_popular: 'Most sung',
     sort_requested: 'Most requested', sort_score: 'Best score', sort_year: 'Newest',

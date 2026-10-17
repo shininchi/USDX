@@ -471,6 +471,13 @@ async function openSong(id, primed = null) {
     toast(errorText(error), 'error');
     return;
   }
+  let close;
+  const detail = songDetail(song, primed, () => close());
+  close = openSheet(detail.node, detail.onClose);
+}
+
+// The details of a song: { node, onClose }. close() closes what shows it.
+function songDetail(song, primed, close) {
 
   const stats = el('div', { class: 'stats' },
     el('div', { class: 'stat' }, el('strong', { text: song.played }), el('span', { text: t('played') })),
@@ -497,7 +504,6 @@ async function openSong(id, primed = null) {
   const iconRow = icons.length ? el('div', { class: 'song-icons' }, icons) : null;
 
   const row = el('div', { class: 'request-row' });
-  let close;
   const act = async (path, okText) => {
     try {
       await api(path, { id: song.id });
@@ -530,7 +536,7 @@ async function openSong(id, primed = null) {
   let open = true;
   if (song.clip) loadClip(song, cover, () => open);
 
-  close = openSheet(el('div', { class: 'detail' },
+  const node = el('div', { class: 'detail' },
     cover,
     el('h2', { text: song.title }),
     el('div', { class: 'artist', text: song.artist }),
@@ -540,11 +546,135 @@ async function openSong(id, primed = null) {
     stats,
     el('h3', { text: t('top_scores') }),
     scores,
-    row), () => {
-      open = false;
-      stopPreview();
-      cover.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); });
+    row);
+  const onClose = () => {
+    open = false;
+    stopPreview();
+    cover.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); });
+  };
+  return { node, onClose };
+}
+
+// ---------- random song ("?" block) ----------
+
+const SPIN_MS = 3200;      // how long the reel turns
+const REEL_COVERS = 24;    // covers passing by before the chosen one
+
+const lucky = { body: null, close: null, detail: null, spinning: false };
+
+function randomItems(items, count, except) {
+  const pool = items.filter(s => s !== except);
+  const result = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    result.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return result;
+}
+
+// starts loading the covers that pass by, so the reel is not blank
+function preloadCovers(songs, ms) {
+  const loads = songs.filter(s => s.cover && s.id >= 0).map(s => new Promise(resolve => {
+    const img = new Image();
+    img.onload = img.onerror = resolve;
+    img.src = `/api/cover/${s.id}`;
+  }));
+  return Promise.race([Promise.all(loads), new Promise(resolve => setTimeout(resolve, ms))]);
+}
+
+function setLuckyButtons(spinning) {
+  lucky.spinning = spinning;
+  document.querySelectorAll('.qblock').forEach(b => {
+    b.disabled = spinning;
+    b.classList.toggle('used', spinning);
+  });
+}
+
+function luckyButton(extraClass) {
+  return el('button', {
+    class: `qblock ${extraClass}`, 'aria-label': t('lucky'), title: t('lucky'),
+    onclick: e => { bump(e.currentTarget); spinLucky(); },
+  }, el('span', { text: '?' }));
+}
+
+function bump(button) {
+  button.classList.remove('bump');
+  void button.offsetWidth; // restart the animation
+  button.classList.add('bump');
+}
+
+async function spinLucky() {
+  if (lucky.spinning) return;
+  // the current list, with its search and filters
+  const items = state.items;
+  if (!items.length) {
+    toast(t('no_results'), 'error');
+    return;
+  }
+  setLuckyButtons(true);
+
+  const chosen = items[Math.floor(Math.random() * items.length)];
+  const withCovers = items.filter(s => s.cover);
+  const passing = randomItems(withCovers.length >= 8 ? withCovers : items, REEL_COVERS, chosen);
+  const detailPromise = api(`/api/songs/${chosen.id}`).catch(error => error);
+
+  if (!lucky.body) {
+    lucky.body = el('div', { class: 'lucky' });
+    const sheet = el('div', {}, luckyButton('in-sheet'), lucky.body);
+    lucky.close = openSheet(sheet, () => {
+      if (lucky.detail) lucky.detail.onClose();
+      lucky.body = lucky.close = lucky.detail = null;
+      document.body.classList.remove('lucky-open');
     });
+    document.body.classList.add('lucky-open');
+    setLuckyButtons(true);
+  }
+  if (lucky.detail) {
+    lucky.detail.onClose();
+    lucky.detail = null;
+  }
+
+  const strip = el('div', { class: 'reel-strip' },
+    // the chosen song on top: the covers fall from above, like a slot machine
+    [chosen, ...passing].map(song => {
+      const cover = coverNode(song);
+      const img = cover.querySelector('img');
+      if (img) img.loading = 'eager';
+      return cover;
+    }));
+  const reel = el('div', { class: 'reel' }, strip);
+  const caption = el('div', { class: 'reel-caption', text: t('lucky_spinning') });
+  lucky.body.replaceChildren(reel, caption);
+
+  await preloadCovers(passing.slice(-10), 800); // the first ones to show
+  if (!lucky.body) return setLuckyButtons(false);
+
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const duration = reduced ? 600 : SPIN_MS;
+  const height = reel.clientHeight;
+  strip.style.transform = `translateY(-${passing.length * height}px)`;
+  void strip.offsetHeight; // start from the bottom of the strip
+  strip.style.transition = `transform ${duration}ms cubic-bezier(.12, .75, .22, 1)`;
+  strip.classList.add('spinning');
+  requestAnimationFrame(() => {
+    strip.style.transform = 'translateY(0)';
+  });
+  setTimeout(() => strip.classList.remove('spinning'), duration * 0.6);
+  await new Promise(resolve => setTimeout(resolve, duration + 150));
+  if (!lucky.body) return setLuckyButtons(false);
+
+  reel.classList.add('landed');
+  const song = await detailPromise;
+  if (!lucky.body) return setLuckyButtons(false);
+  if (song instanceof Error) {
+    caption.textContent = errorText(song);
+  } else {
+    lucky.detail = songDetail(song, null, () => lucky.close && lucky.close());
+    lucky.detail.node.classList.add('appear');
+    await new Promise(resolve => setTimeout(resolve, 350));
+    if (!lucky.body) return setLuckyButtons(false);
+    lucky.body.replaceChildren(lucky.detail.node);
+  }
+  setLuckyButtons(false);
 }
 
 // ---------- queue ----------
@@ -630,6 +760,7 @@ function setTab(tab) {
   $('queueView').classList.toggle('hidden', tab !== 'queue');
   renderIndex();
   $('toTop').classList.toggle('hidden', tab !== 'songs' || window.scrollY < 1500);
+  $('luckyBtn').classList.toggle('hidden', tab !== 'songs');
   if (tab === 'queue') refreshQueue();
 }
 
@@ -663,6 +794,8 @@ async function start() {
   $('tabSongs').addEventListener('click', () => setTab('songs'));
   $('tabQueue').addEventListener('click', () => setTab('queue'));
   $('nickChip').addEventListener('click', askNick);
+  document.body.append(luckyButton('floating'));
+  document.querySelector('.qblock.floating').id = 'luckyBtn';
   $('autoplayChip').addEventListener('click', toggleAutoplay);
   renderAutoplay();
   window.addEventListener('resize', debounce(fitHeader, 150));
