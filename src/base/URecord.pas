@@ -222,12 +222,15 @@ var
 // a captured device sent no samples for this long (some USB microphones
 // stop streaming after a hard knock and only come back when reopened)
 function AudioCaptureStalled(TimeoutMs: cardinal): boolean;
+// number of devices being captured
+function AudioCaptureDevices: integer;
 
 implementation
 
 uses
   ULog,
   UMicTaps,
+  UVoiceCommands,
   UNote;
 
 var
@@ -339,6 +342,9 @@ begin
 
   // taps on the microphone used as commands
   MicTapsProcess(PlayerIndex, PSmallInt(Buffer), BufferSize div SizeOf(SmallInt),
+    Round(AudioFormat.SampleRate));
+  // and spoken commands after them
+  VoiceFeed(PlayerIndex, PSmallInt(Buffer), BufferSize div SizeOf(SmallInt),
     Round(AudioFormat.SampleRate));
 
   // process BufferArray
@@ -912,6 +918,16 @@ begin
     end;
 end;
 
+function AudioCaptureDevices: integer;
+var
+  I: integer;
+begin
+  Result := 0;
+  for I := 0 to High(AudioInputProcessor.DeviceList) do
+    if Assigned(AudioInputProcessor.DeviceList[I]) and AudioInputProcessor.DeviceList[I].Capturing then
+      Inc(Result);
+end;
+
 { TAudioInputBase }
 
 function TAudioInputBase.FinalizeRecord: boolean;
@@ -1005,8 +1021,6 @@ begin
       begin
         Device.LinkCaptureBuffer(ChannelIndex, AudioInputProcessor.Sound[Player]);
         DeviceUsed := true;
-        Log.LogStatus(Format('%s, channel %d: player %d', [Device.Name, ChannelIndex + 1, Player + 1]),
-          'TAudioInputBase.CaptureStart');
       end;
     end;
 

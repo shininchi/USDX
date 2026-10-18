@@ -31,7 +31,9 @@ unit UPlayerSlots;
  * It also turns taps on the microphones (UMicTaps) into commands: the box
  * of the microphone flashes on each tap, and while singing three taps
  * pause or resume the song and four or more leave it, after a few seconds
- * in which another tap cancels.
+ * in which another tap cancels. Outside the songs, two taps listen to the
+ * player (UVoiceCommands): a nickname takes the microphone, a goodbye
+ * frees it.
  *}
 
 interface
@@ -67,7 +69,8 @@ uses
   URecord,
   URenderer,
   UText,
-  UThemes;
+  UThemes,
+  UVoiceCommands;
 
 const
   BOX_SIZE     = 30;
@@ -78,6 +81,7 @@ const
   FLASH_MS     = 250;
   SERIES_MS    = 1500; // "x3" shown over the box after a series
   LEAVE_MS     = 3000; // time to cancel leaving the song
+  VOICE_MS     = 3000; // the answer to a voice command stays this long
   // names wider than their room scroll to the end and start over
   SCROLL_SPEED = 30;   // pixels per second
   SCROLL_WAIT  = 1200; // ms still at the start and at the end
@@ -185,28 +189,8 @@ begin
   Singing := (Display.CurrentScreen = @ScreenSing) and (Display.NextScreen = nil);
   while MicTapsPop(Event) do
   begin
-    if (Event.Kind = mtLevel) and (Event.Count = -1) then
-    begin
-      Log.LogStatus(Format('Hearing the microphone of player %d', [Event.Player + 1]), 'MicTaps');
-      Continue;
-    end;
-    if Event.Kind = mtLevel then
-    begin
-      Log.LogStatus(Format('Level on player %d: %.2f', [Event.Player + 1, Event.Peak]), 'MicTaps');
-      Continue;
-    end;
-    if Event.Kind = mtRejected then
-    begin
-      Log.LogStatus(Format('Not a tap on player %d: level %.2f, still loud after %d ms',
-        [Event.Player + 1, Event.Peak, Event.DecayMs]), 'MicTaps');
-      Continue;
-    end;
     if Event.Kind = mtTap then
-    begin
-      Log.LogStatus(Format('Tap on player %d: level %.2f, faded in %d ms',
-        [Event.Player + 1, Event.Peak, Event.DecayMs]), 'MicTaps');
-      Continue;
-    end;
+      Continue;  // the box flashes by itself
     Log.LogStatus(Format('Player %d tapped %d times', [Event.Player + 1, Event.Count]), 'MicTaps');
     if (Event.Player >= 0) and (Event.Player < IMaxPlayerCount) then
     begin
@@ -216,7 +200,9 @@ begin
     if Singing then
       SingCommand(Event.Player, Event.Count)
     else if Event.Count = 1 then
-      SingleTap(Event.Player);
+      SingleTap(Event.Player)
+    else if Event.Count = 2 then
+      VoiceListen(Event.Player);
   end;
 end;
 
@@ -234,7 +220,6 @@ begin
               (Display.CurrentScreen = @ScreenHighScores)) and (Display.NextScreen = nil);
   if OnSongs and not AudioCaptureRunning then
   begin
-    Log.LogStatus('Listening to the microphones', 'MicTaps');
     AudioInput.CaptureStart;
     CaptureOurs := true;
   end
@@ -248,17 +233,23 @@ begin
   if Display.CurrentScreen = @ScreenSing then
     CaptureOurs := false;
 
-  // a microphone stopped sending sound (some stop after a hard knock):
-  // reopen the capture, also while singing
-  if AudioCaptureRunning and AudioCaptureStalled(1500) and
-     (Elapsed(RestartedAt) > 3000) then
+  // a microphone stopped sending sound (some reset after a hard knock), or
+  // none is captured (plugged in after the start): look for the microphones
+  // again, like the microphone options do, and reopen the capture
+  if AudioCaptureRunning and (Elapsed(RestartedAt) > 5000) and
+     (AudioCaptureStalled(1500) or (AudioCaptureDevices = 0)) then
   begin
-    Log.LogWarn('A microphone stopped sending sound, restarting the capture', 'MicTaps');
+    if AudioCaptureDevices = 0 then
+      Log.LogWarn('No microphone is captured, looking for them again', 'MicTaps')
+    else
+      Log.LogWarn('A microphone stopped sending sound, looking for the microphones again', 'MicTaps');
     RestartedAt := SDL_GetTicks;
+    RefreshAudioInputDevices(aimFast);
     AudioInput.CaptureStart;
   end;
 
   HandleEvents;
+  VoiceTick;
 
   if (LeaveAt <> 0) and (SDL_GetTicks >= LeaveAt) then
   begin
@@ -441,6 +432,52 @@ begin
   Renderer.DepthTest := DepthTest;
 end;
 
+// what the voice commands are doing, above the boxes
+procedure DrawVoice(Y: single; Ticks: cardinal);
+var
+  Player: integer;
+  Kind: TVoiceResult;
+  Name, Text: UTF8String;
+  At: cardinal;
+  Col: TRGB;
+  Alpha, W: single;
+begin
+  Player := VoiceListeningPlayer;
+  Alpha := 1;
+  if Player >= 0 then
+    Text := Language.Translate('VOICE_LISTENING')
+  else if VoiceLastResult(Player, Kind, Name, At) and (Elapsed(At) < VOICE_MS) then
+  begin
+    Alpha := Min(1, (VOICE_MS - Elapsed(At)) / 500);
+    case Kind of
+      vrHello:   Text := Format(Language.Translate('VOICE_HELLO'), [Name]);
+      vrGoodbye:
+        if Name <> '' then
+          Text := Format(Language.Translate('VOICE_GOODBYE'), [Name])
+        else
+          Text := Format(Language.Translate('VOICE_FREE'), [Player + 1]);
+      vrNotHeard: Text := Language.Translate('VOICE_NOT_HEARD');
+    else
+      Text := Language.Translate('VOICE_NOT_UNDERSTOOD');
+    end;
+  end
+  else
+    Exit;
+  if (Player < 0) or (Player >= IMaxPlayerCount) then
+    Exit;
+
+  Col := GetPlayerColor(Ini.PlayerColor[Player]);
+  SetFontStyle(ftBold);
+  SetFontSize(18);
+  W := TextWidth(Text) + 20;
+  Renderer.DepthTest := false;
+  Renderer.DrawQuad(16, Y, 0, W, 28, 0.05, 0.05, 0.1, 0.85 * Alpha);
+  Renderer.DrawQuad(16, Y, 0, 4, 28, Col.R, Col.G, Col.B, Alpha);
+  SetFontColor(1, 1, 1, Alpha);
+  SetFontPos(28, Y + 3);
+  PrintText(Text);
+end;
+
 procedure PlayerSlotsDraw;
 var
   I, N:     integer;
@@ -473,8 +510,10 @@ begin
     X := CX - BOX_SIZE / 2;
     Col := GetPlayerColor(Ini.PlayerColor[I]);
 
-    // a tap flashes the box white
+    // a tap flashes the box white; it pulses while listening to the player
     Flash := 0;
+    if VoiceListeningPlayer = I then
+      Flash := 0.35 + 0.35 * Sin(Ticks / 120);
     if (MicTapLastTicks(I) <> 0) and (Elapsed(MicTapLastTicks(I)) < FLASH_MS) then
       Flash := 1 - Elapsed(MicTapLastTicks(I)) / FLASH_MS;
 
@@ -515,6 +554,8 @@ begin
       PrintText(Text);
     end;
   end;
+
+  DrawVoice(Y - 66, Ticks);
 
   Renderer.DepthTest := DepthTest;
 end;

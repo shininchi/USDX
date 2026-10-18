@@ -48,9 +48,7 @@ interface
 {$I switches.inc}
 
 type
-  // mtLevel and mtRejected are for tuning: the loudest moment of the last
-  // second, and loud sounds that were not taps
-  TMicTapKind = (mtTap, mtSeries, mtLevel, mtRejected);
+  TMicTapKind = (mtTap, mtSeries);
 
   TMicTapEvent = record
     Kind:   TMicTapKind;
@@ -108,9 +106,6 @@ type
     LastTap:    int64;   // Clock of the last tap, -1 = none
     Count:      integer; // taps of the current series
     LastTicks:  cardinal;
-    SecondPeak: single;  // loudest block of the current second
-    SecondEnd:  int64;   // Clock when the second ends
-    Heard:      boolean; // samples arrived since the last reset (reported once)
   end;
 
 var
@@ -236,12 +231,6 @@ begin
         else if Ms(P, P.StateStart, SampleRate) > MAX_DECAY_MS then
         begin
           // still loud: a shout or a note, not a tap
-          Event.Kind := mtRejected;
-          Event.Player := Player;
-          Event.Count := 0;
-          Event.Peak := P.Peak;
-          Event.DecayMs := Ms(P, P.StateStart, SampleRate);
-          Push(Event);
           P.State := tsRefractory;
           P.StateStart := P.Clock;
         end;
@@ -263,23 +252,6 @@ begin
     P.Count := 0;
   end;
 
-  if Level > P.SecondPeak then
-    P.SecondPeak := Level;
-  if P.Clock >= P.SecondEnd then
-  begin
-    if P.SecondPeak >= 0.05 then
-    begin
-      Event.Kind := mtLevel;
-      Event.Player := Player;
-      Event.Count := 0;
-      Event.Peak := P.SecondPeak;
-      Event.DecayMs := 0;
-      Push(Event);
-    end;
-    P.SecondPeak := 0;
-    P.SecondEnd := P.Clock + SampleRate;
-  end;
-
   if P.State <> tsCandidate then
     P.Background := 0.97 * P.Background + 0.03 * Level;
   P.PrevLevel := Level;
@@ -290,20 +262,10 @@ end;
 procedure MicTapsProcess(Player: integer; Samples: PSmallInt; Count, SampleRate: integer);
 var
   I, V, BlockSize: integer;
-  FirstAudio: TMicTapEvent;
 begin
   if (not MicTapsEnabled) or (Player < 0) or (Player >= MAX_PLAYERS) or (SampleRate <= 0) then
     Exit;
   BlockSize := SampleRate * BLOCK_MS div 1000;
-  if not Players[Player].Heard then
-  begin
-    Players[Player].Heard := true;
-    FillChar(FirstAudio, SizeOf(FirstAudio), 0);
-    FirstAudio.Kind := mtLevel;
-    FirstAudio.Player := Player;
-    FirstAudio.Count := -1;  // marks the first audio of the player
-    Push(FirstAudio);
-  end;
   for I := 0 to Count - 1 do
   begin
     V := Abs(integer(Samples[I]));

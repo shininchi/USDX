@@ -105,6 +105,7 @@ uses
   USongRequestsServer,
   UMicTaps,
   UPlayerSlots,
+  UVoiceCommands,
   UTime,
   UWebcam;
   //UVideoAcinerella;
@@ -249,6 +250,7 @@ begin
     SoundLib.StartBgMusic;
 
     MicTapsLoadConfig;
+    VoiceStart;
 
     // song requests from guests' phones
     Log.LogStatus('Song Requests', 'Initialization');
@@ -270,6 +272,9 @@ begin
     // TODO:
     // call an uninitialize routine for every initialize step
     // or at least use the corresponding Free methods
+
+    Log.LogStatus('Stopping Voice Commands', 'Finalization');
+    VoiceStop;
 
     Log.LogStatus('Stopping Song Requests', 'Finalization');
     StopSongRequests;

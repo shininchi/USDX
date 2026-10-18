@@ -303,6 +303,8 @@ type
       property PendingCount: integer read GetPendingCount;
       property Version: integer read fVersion;
       property GameNick: UTF8String read fGameNick write fGameNick;
+      // nicknames guests chose in the web page
+      procedure AddNicks(List: TStrings);
   end;
 
 var
@@ -593,6 +595,20 @@ begin
     if (not Success) and (Start > 0) and (not Terminated) then
       Success := MakeClip(Video, Target, 0);
     fOwner.ClipDone(Target, Success);
+  end;
+end;
+
+procedure TSongRequests.AddNicks(List: TStrings);
+var
+  I: integer;
+begin
+  fLock.Enter;
+  try
+    for I := 0 to fUsers.Count - 1 do
+      if Trim(TSRUser(fUsers[I]).Nick) <> '' then
+        List.Add(Trim(TSRUser(fUsers[I]).Nick));
+  finally
+    fLock.Leave;
   end;
 end;
 
