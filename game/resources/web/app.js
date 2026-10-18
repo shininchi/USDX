@@ -701,6 +701,7 @@ function micBox(mic, big) {
 
 // the guest's microphone, or an empty grey box
 function renderMicChip() {
+  renderCrownBadge();
   const chip = $('micChip');
   const mine = state.mics.mics.find(m => m.n === state.mics.mine);
   chip.replaceChildren(mine ? micBox(mine, false) : el('span', { class: 'mic-box' }));
@@ -734,6 +735,73 @@ async function openMicPicker() {
     el('p', { text: mics.length ? (changeable ? t('mic_text') : t('mic_not_now')) : t('mic_none') }),
     list,
     mine && changeable ? el('button', { class: 'btn-ghost', text: t('mic_leave'), onclick: () => chooseMic(0, close) }) : null));
+}
+
+// ---------- achievements ----------
+
+// a gold crown like the one of the song selection
+function crownIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 20');
+  svg.setAttribute('class', 'crown-icon');
+  svg.innerHTML = '<path d="M2 15 L1 6 L7 10 L12 2 L17 10 L23 6 L22 15 Z" fill="#fcc626" stroke="#331f05" stroke-width="1.6" stroke-linejoin="round"/>'
+    + '<rect x="2" y="14.5" width="20" height="4" rx="1" fill="#f59e1f" stroke="#331f05" stroke-width="1.6"/>'
+    + '<circle cx="1.5" cy="5.5" r="1.8" fill="#fcc626" stroke="#331f05" stroke-width="1.2"/>'
+    + '<circle cx="12" cy="2" r="1.8" fill="#fcc626" stroke="#331f05" stroke-width="1.2"/>'
+    + '<circle cx="22.5" cy="5.5" r="1.8" fill="#fcc626" stroke="#331f05" stroke-width="1.2"/>';
+  return svg;
+}
+
+function crownLabel(n) {
+  return el('span', { class: 'crown-label' }, crownIcon(), n > 1 ? el('span', { text: `×${n}` }) : null);
+}
+
+function renderCrownBadge() {
+  const n = state.mics.crown || 0;
+  $('crownBadge').classList.toggle('hidden', n === 0);
+  if (n) {
+    $('crownBadge').replaceChildren(crownLabel(n));
+    $('crownBadge').title = t('crown_now', n);
+  }
+}
+
+
+async function refreshRecords() {
+  let data;
+  try {
+    data = await api('/api/records');
+  } catch (error) {
+    $('records').replaceChildren(el('p', { class: 'summary', text: errorText(error) }));
+    return;
+  }
+  if (!data.nick) {
+    $('records').replaceChildren(
+      el('p', { class: 'summary', text: t('records_nick') }),
+      el('button', { class: 'btn-primary', text: t('change_nick'), onclick: async () => { if (await askNick()) refreshRecords(); } }));
+    return;
+  }
+  // the best ratings first
+  const tiles = [...data.ratings].reverse().map(r => {
+    const got = r.total > 0;
+    return el('div', { class: `record${got ? ' got' : ''}` },
+      el('img', { src: `/api/icon/rating${r.n}`, alt: '' }),
+      el('div', { class: 'record-name', text: t('rating_' + r.n) }),
+      el('div', { class: 'record-count', text: got ? `×${r.total}` : t('records_never') }),
+      r.session ? el('div', { class: 'record-session', text: t('records_session', r.session) }) : null);
+  });
+  const streak = el('div', { class: 'streak' },
+    crownIcon(),
+    el('div', {},
+      el('div', { class: 'record-name', text: t('best_streak') }),
+      el('div', { class: 'summary', text: data.bestStreak ? t('streak_songs', data.bestStreak) : t('streak_none') })),
+    data.bestStreak ? el('div', { class: 'record-count', text: `×${data.bestStreak}` }) : null);
+  if (!data.bestStreak) streak.classList.add('none');
+  $('records').replaceChildren(
+    el('h2', { class: 'records-title' }, t('records_title', data.nick), data.crown ? crownLabel(data.crown) : null),
+    data.crown ? el('p', { class: 'crown-now', text: t('crown_now', data.crown) }) : null,
+    el('p', { class: 'summary', text: t('records_text') }),
+    streak,
+    el('div', { class: 'records-grid' }, tiles));
 }
 
 // ---------- queue ----------
@@ -815,12 +883,15 @@ function setTab(tab) {
   state.tab = tab;
   $('tabSongs').classList.toggle('active', tab === 'songs');
   $('tabQueue').classList.toggle('active', tab === 'queue');
+  $('tabRecords').classList.toggle('active', tab === 'records');
   $('songsView').classList.toggle('hidden', tab !== 'songs');
   $('queueView').classList.toggle('hidden', tab !== 'queue');
+  $('recordsView').classList.toggle('hidden', tab !== 'records');
   renderIndex();
   $('toTop').classList.toggle('hidden', tab !== 'songs' || window.scrollY < 1500);
   $('luckyBtn').classList.toggle('hidden', tab !== 'songs');
   if (tab === 'queue') refreshQueue();
+  if (tab === 'records') refreshRecords();
 }
 
 // ---------- start ----------
@@ -852,6 +923,7 @@ async function start() {
   });
   $('tabSongs').addEventListener('click', () => setTab('songs'));
   $('tabQueue').addEventListener('click', () => setTab('queue'));
+  $('tabRecords').addEventListener('click', () => setTab('records'));
   $('nickChip').addEventListener('click', askNick);
   $('micChip').addEventListener('click', openMicPicker);
   document.body.append(luckyButton('floating'));
@@ -874,7 +946,12 @@ async function start() {
   if (!state.info.me.nick) askNick();
 
   // poll often while the page is visible, not at all in the background
-  setInterval(() => { if (!document.hidden) { refreshQueue(); refreshMics(); } }, 4000);
+  setInterval(() => {
+    if (document.hidden) return;
+    refreshQueue();
+    refreshMics();
+    if (state.tab === 'records') refreshRecords();
+  }, 4000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshQueue(); });
   setInterval(updateNowProgress, 1000);
   setInterval(() => { if (!document.hidden) loadInfo().catch(() => {}); }, 30000);

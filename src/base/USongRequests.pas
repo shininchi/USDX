@@ -183,6 +183,8 @@ type
       fVersion:       integer; // grows with every change of the state
       fGameNick:      UTF8String; // shown for requests added in the game
       fIconFiles:     TStringList; // song icon name = file of the current skin
+      fSessionRatings: TStringList; // player = rating counts of this session, comma separated
+      fCrowns:        TStringList; // player = songs won in a row, for who holds the crown
       fIconTicks:     integer;
       fLastSave:      TDateTime;
 
@@ -331,6 +333,13 @@ type
       // Player 1-based, 0 = give back the guest's microphone
       function RequestMic(const UserId: UTF8String; Player: integer): UTF8String;
       function AdminSetMic(Player: integer; const Name: UTF8String): UTF8String;
+
+      // ratings of the score screen (URatings): counted for this session, and
+      // shown with the all-time counts in the guest's achievements
+      procedure AddSessionRating(const Player: UTF8String; Rating: integer);
+      function RecordsJSON(const UserId: UTF8String): UTF8String;
+      // who won the last song (player=streak), from the score screen
+      procedure SetCrowns(List: TStrings);
   end;
 
 var
@@ -362,6 +371,7 @@ uses
   USong,
   USongs,
   UThemes,
+  URatings,
   UUnicodeUtils;
 
 const
@@ -714,6 +724,10 @@ begin
       end;
       Root.Add('mics', List);
       Root.Add('mine', Mine);
+      if Nick <> '' then
+        Root.Add('crown', StrToIntDef(fCrowns.Values[Nick], 0))
+      else
+        Root.Add('crown', 0);
       Root.Add('changeable', fMicsChangeable);
     finally
       fLock.Leave;
@@ -774,6 +788,93 @@ begin
     Result := '';
   finally
     fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.SetCrowns(List: TStrings);
+begin
+  fLock.Enter;
+  try
+    fCrowns.Assign(List);
+  finally
+    fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.AddSessionRating(const Player: UTF8String; Rating: integer);
+var
+  Counts: TStringList;
+  I: integer;
+begin
+  if (Rating < 0) or (Rating >= RATING_COUNT) or (Trim(Player) = '') then
+    Exit;
+  Counts := TStringList.Create;
+  fLock.Enter;
+  try
+    Counts.CommaText := fSessionRatings.Values[Trim(Player)];
+    while Counts.Count < RATING_COUNT do
+      Counts.Add('0');
+    Counts[Rating] := IntToStr(StrToIntDef(Counts[Rating], 0) + 1);
+    I := fSessionRatings.IndexOfName(Trim(Player));
+    if I >= 0 then
+      fSessionRatings.Delete(I);
+    fSessionRatings.Add(Trim(Player) + '=' + Counts.CommaText);
+  finally
+    fLock.Leave;
+    Counts.Free;
+  end;
+end;
+
+function TSongRequests.RecordsJSON(const UserId: UTF8String): UTF8String;
+var
+  Root: TJSONObject;
+  List: TJSONArray;
+  User: TSRUser;
+  Nick: UTF8String;
+  Session: TStringList;
+  Total: TRatingCounts;
+  I, Crown, BestStreak: integer;
+begin
+  Nick := '';
+  Crown := 0;
+  BestStreak := 0;
+  Session := TStringList.Create;
+  Root := TJSONObject.Create;
+  try
+    fLock.Enter;
+    try
+      User := FindUser(UserId);
+      if User <> nil then
+        Nick := Trim(User.Nick);
+      if Nick <> '' then
+      begin
+        Session.CommaText := fSessionRatings.Values[Nick];
+        Crown := StrToIntDef(fCrowns.Values[Nick], 0);
+      end;
+    finally
+      fLock.Leave;
+    end;
+    while Session.Count < RATING_COUNT do
+      Session.Add('0');
+
+    FillChar(Total, SizeOf(Total), 0);
+    if (Nick <> '') and fScoreFile.IsFile then
+    begin
+      Total := StoredRatings(fScoreFile.ToUTF8, Nick);
+      BestStreak := StoredBestStreak(fScoreFile.ToUTF8, Nick);
+    end;
+
+    List := TJSONArray.Create;
+    for I := 0 to RATING_COUNT - 1 do
+      List.Add(TJSONObject.Create(['n', I, 'total', Total[I], 'session', StrToIntDef(Session[I], 0)]));
+    Root.Add('nick', Nick);
+    Root.Add('ratings', List);
+    Root.Add('crown', Crown);           // songs won in a row now, 0 = no crown
+    Root.Add('bestStreak', BestStreak);
+    Result := Root.AsJSON;
+  finally
+    Root.Free;
+    Session.Free;
   end;
 end;
 
@@ -852,6 +953,10 @@ begin
   fThumbDir := Platform.GetGameUserPath.Append('cache').Append('request-covers');
   fClipDir := Platform.GetGameUserPath.Append('cache').Append('request-videos');
   fIconFiles := TStringList.Create;
+  fSessionRatings := TStringList.Create;
+  fSessionRatings.CaseSensitive := false;
+  fCrowns := TStringList.Create;
+  fCrowns.CaseSensitive := false;
   fClipJobs := TStringList.Create;
   fClipFailed := TStringList.Create;
   fClipEvent := TEvent.Create(nil, false, false, '');
@@ -890,6 +995,8 @@ begin
   fClipJobs.Free;
   fClipFailed.Free;
   fIconFiles.Free;
+  fSessionRatings.Free;
+  fCrowns.Free;
   if fDirty then
     SaveState;
   fQueue.Free;
@@ -1567,6 +1674,13 @@ begin
       Path := Skin.GetTextureFileName('icon_song_' + NAMES[I]);
       if Path.IsSet and Path.IsFile then
         Files.Values[NAMES[I]] := Path.ToNative;
+    end;
+    // the pictures of the score screen ratings
+    for I := 0 to RATING_COUNT - 1 do
+    begin
+      Path := Skin.GetTextureFileName('Rating_' + IntToStr(I));
+      if Path.IsSet and Path.IsFile then
+        Files.Values['rating' + IntToStr(I)] := Path.ToNative;
     end;
     fLock.Enter;
     try

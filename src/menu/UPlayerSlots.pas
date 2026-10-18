@@ -33,7 +33,7 @@ unit UPlayerSlots;
  * pause or resume the song and four or more leave it, after a few seconds
  * in which another tap cancels. Outside the songs, two taps listen to the
  * player (UVoiceCommands): a nickname takes the microphone, a goodbye
- * frees it.
+ * frees it; in the song selection three taps start the selected song.
  *}
 
 interface
@@ -54,6 +54,7 @@ procedure PlayerSlotsSongFinished;
 implementation
 
 uses
+  Classes,
   Math,
   SysUtils,
   sdl2,
@@ -65,12 +66,15 @@ uses
   UMicTaps,
   UMusic,
   UCommon,
+  UParty,
+  USongs,
   UNote,
   URecord,
   URenderer,
   UText,
   UThemes,
   USongRequests,
+  URatings,
   UVoiceCommands;
 
 const
@@ -89,6 +93,8 @@ const
 
 var
   Winner:       array[0..IMaxPlayerCount-1] of boolean;
+  WinStreak:    array[0..IMaxPlayerCount-1] of integer; // songs won in a row by the crown holders
+  Streaks:      TStringList;  // player (name or #slot) = songs won in a row
   SeriesCount:  array[0..IMaxPlayerCount-1] of integer;
   SeriesTicks:  array[0..IMaxPlayerCount-1] of cardinal;
   LeaveAt:      cardinal;  // SDL ticks when the song is left, 0 = not leaving
@@ -147,14 +153,61 @@ end;
 
 procedure PlayerSlotsSongFinished;
 var
-  I, Best: integer;
+  I, Best, Streak: integer;
+  Key: UTF8String;
+  Crowns: TStringList;
 begin
+  // songs sung alone have no winner and keep the crown where it was
+  if Length(Player) < 2 then
+    Exit;
   Best := 0;
   for I := 0 to High(Player) do
     Best := Max(Best, Player[I].ScoreTotalInt);
-  for I := 0 to High(Winner) do
-    Winner[I] := (Length(Player) >= 2) and (Best > 0) and (I <= High(Player)) and
-                 (Player[I].ScoreTotalInt = Best);
+
+  if Streaks = nil then
+  begin
+    Streaks := TStringList.Create;
+    Streaks.CaseSensitive := false;
+  end;
+  Crowns := TStringList.Create;
+  try
+    for I := 0 to High(Winner) do
+    begin
+      Winner[I] := (Best > 0) and (I <= High(Player)) and (Player[I].ScoreTotalInt = Best);
+      WinStreak[I] := 0;
+      if I > High(Player) then
+        Continue;
+      // the streak goes with the player, by name (or by microphone without one)
+      if HasName(I) then
+        Key := Trim(Player[I].Name)
+      else
+        Key := '#' + IntToStr(I);
+      if Winner[I] then
+        Streak := StrToIntDef(Streaks.Values[Key], 0) + 1
+      else
+        Streak := 0;
+      Streaks.Values[Key] := IntToStr(Streak);
+      if Winner[I] then
+      begin
+        WinStreak[I] := Streak;
+        if HasName(I) then
+        begin
+          RecordStreak(Key, Streak);
+          Crowns.Values[Key] := IntToStr(Streak);
+        end;
+      end;
+    end;
+    // losers' streaks end even if they are not on a microphone now
+    for I := Streaks.Count - 1 downto 0 do
+      if Crowns.IndexOfName(Streaks.Names[I]) < 0 then
+        if not ((Copy(Streaks.Names[I], 1, 1) = '#') and
+                Winner[StrToIntDef(Copy(Streaks.Names[I], 2, 3), 0)]) then
+          Streaks.Delete(I);
+    if SongRequests <> nil then
+      SongRequests.SetCrowns(Crowns);
+  finally
+    Crowns.Free;
+  end;
 end;
 
 { commands }
@@ -180,12 +233,42 @@ begin
   end;
 end;
 
+// like Sing in the main menu: the song selection, or the names first
+procedure GoToSongs;
+begin
+  if Songs.SongList.Count = 0 then
+    Exit;
+  Party.bPartyGame := false;
+  if Ini.Players <= 3 then
+    PlayersPlay := Ini.Players + 1
+  else
+    PlayersPlay := 6;
+  if Ini.OnSongClick = sSelectPlayer then
+    Display.FadeTo(@ScreenSong)
+  else
+  begin
+    ScreenName.Goto_SingScreen := false;
+    Display.FadeTo(@ScreenName);
+  end;
+end;
+
 // one tap outside the songs
 procedure SingleTap(Player: integer);
 begin
   if Display.NextScreen <> nil then
     Exit;
-  if Display.CurrentScreen = @ScreenSong then
+  if Display.CurrentScreen = @ScreenMain then
+    GoToSongs
+  else if Display.CurrentScreen = @ScreenOptionsRecord then
+  begin
+    // leave the microphone options for the songs, keeping the changes
+    Ini.Save;
+    GoToSongs;
+  end
+  else if Display.CurrentScreen = @ScreenName then
+    // like Enter: on to the songs with these names
+    Display.ParseInput(SDLK_RETURN, 0, true)
+  else if Display.CurrentScreen = @ScreenSong then
     // like the N key: the next song request
     Display.ParseInput(SDLK_N, 0, true)
   else if (Display.CurrentScreen = @ScreenScore) or (Display.CurrentScreen = @ScreenHighScores) then
@@ -214,7 +297,11 @@ begin
     else if Event.Count = 1 then
       SingleTap(Event.Player)
     else if Event.Count = 2 then
-      VoiceListen(Event.Player);
+      VoiceListen(Event.Player)
+    else if (Event.Count = 3) and (Display.CurrentScreen = @ScreenSong) and
+            (Display.NextScreen = nil) then
+      // like Enter: sing the selected song
+      Display.ParseInput(SDLK_RETURN, 0, true);
   end;
 end;
 
@@ -261,19 +348,35 @@ end;
 procedure PlayerSlotsTick;
 var
   OnSongs: boolean;
+  Event:   TMicTapEvent;
 begin
   SyncWebMics;
 
-  if (AudioInput = nil) or not MicTapsEnabled then
+  if AudioInput = nil then
     Exit;
+  if not MicTapsEnabled then
+  begin
+    // switched off: stop listening where only the taps needed it
+    if CaptureOurs and AudioCaptureRunning and (Display.CurrentScreen <> @ScreenSing) then
+      AudioInput.CaptureStop;
+    CaptureOurs := false;
+    while MicTapsPop(Event) do ;
+    Exit;
+  end;
 
   // the song selection listens to the microphones too; singing starts and
   // stops the capture by itself
   // also the scores after a song, where a tap is like Enter
-  OnSongs := ((Display.CurrentScreen = @ScreenSong) or (Display.CurrentScreen = @ScreenScore) or
-              (Display.CurrentScreen = @ScreenHighScores)) and (Display.NextScreen = nil);
+  OnSongs := ((Display.CurrentScreen = @ScreenMain) or (Display.CurrentScreen = @ScreenName) or
+              (Display.CurrentScreen = @ScreenSong) or
+              (Display.CurrentScreen = @ScreenScore) or (Display.CurrentScreen = @ScreenHighScores)) and
+             (Display.NextScreen = nil);
   if OnSongs and not AudioCaptureRunning then
   begin
+    // the capture opens the microphones of the players who sing; before the
+    // song selection (main menu) that number is not set yet
+    if PlayersPlay < ConfiguredPlayers then
+      PlayersPlay := ConfiguredPlayers;
     AudioInput.CaptureStart;
     CaptureOurs := true;
   end
@@ -583,7 +686,21 @@ begin
     end;
 
     if Winner[I] then
+    begin
       DrawCrown(CX, Y - 4);
+      // songs won in a row
+      if WinStreak[I] >= 2 then
+      begin
+        SetFontStyle(ftBold);
+        SetFontSize(13);
+        Text := 'x' + IntToStr(WinStreak[I]);
+        Renderer.DepthTest := false;
+        Renderer.DrawQuad(CX + 9, Y - 24, 0, TextWidth(Text) + 6, 15, 0.05, 0.05, 0.1, 0.85);
+        SetFontColor(1.0, 0.85, 0.3, 1);
+        SetFontPos(CX + 12, Y - 25);
+        PrintText(Text);
+      end;
+    end;
 
     // number in the middle
     SetFontStyle(ftBold);

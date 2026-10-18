@@ -63,6 +63,8 @@ var
   MicTapLevel:    single = 0.25;
 
 procedure MicTapsLoadConfig;
+// switches the taps on or off and saves it in config.ini
+procedure MicTapsSetEnabled(Enabled: boolean);
 // audio thread: new samples of a player's microphone (signed 16 bit, mono)
 procedure MicTapsProcess(Player: integer; Samples: PSmallInt; Count, SampleRate: integer);
 // main thread: next event, false when there is none
@@ -181,6 +183,22 @@ begin
   end;
   if (MicTapLevel < 0.05) or (MicTapLevel > 1) then
     MicTapLevel := 0.25;
+end;
+
+procedure MicTapsSetEnabled(Enabled: boolean);
+var
+  IniFile: TIniFile;
+begin
+  MicTapsEnabled := Enabled;
+  IniFile := TIniFile.Create(Ini.Filename.ToNative);
+  try
+    if Enabled then
+      IniFile.WriteString('MicTaps', 'Enabled', 'On')
+    else
+      IniFile.WriteString('MicTaps', 'Enabled', 'Off');
+  finally
+    IniFile.Free;
+  end;
 end;
 
 function Ms(const P: TPlayerTaps; Since: int64; SampleRate: integer): int64;

@@ -21,12 +21,14 @@
     <div class="top-row">
       <div class="brand"><img class="brand-logo" src="/assets/logo-128.png" alt=""><span data-i18n="brand">Cancionero</span></div>
       <button class="chip" id="autoplayChip" aria-pressed="false"></button>
+      <span class="crown-badge hidden" id="crownBadge"></span>
       <button class="chip mic-chip" id="micChip" title="Micrófono" aria-label="Micrófono"><span class="mic-box"></span></button>
       <button class="chip" id="nickChip" title="Cambiar apodo">…</button>
     </div>
     <nav class="tabs">
       <button id="tabSongs" class="active" data-i18n="tab_songs">Canciones</button>
-      <button id="tabQueue"><span data-i18n="tab_queue">Cola</span><span class="badge hidden" id="queueBadge">0</span></button>
+      <button id="tabRecords" data-i18n="tab_records">Logros</button>
+      <button id="tabQueue"><span data-i18n="tab_inqueue">En cola</span><span class="badge hidden" id="queueBadge">0</span></button>
     </nav>
     <div class="now hidden" id="nowPlaying"></div>
   </header>
@@ -75,6 +77,10 @@
 
       <div class="summary" id="summary"></div>
       <div class="results grid" id="results"></div>
+    </section>
+
+    <section id="recordsView" class="hidden">
+      <div id="records"></div>
     </section>
 
     <section id="queueView" class="hidden">

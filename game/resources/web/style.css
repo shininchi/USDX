@@ -738,3 +738,36 @@ body.lucky-open .qblock.floating { display: none; }
 .mic-row input { flex: 1; min-width: 0; }
 .mic-row button { flex: none; }
 .mic-row .mic-box.big { width: 44px; height: 44px; font-size: 20px; }
+
+/* achievements: the ratings of the score screen */
+.records-title { margin: 4px 0 2px; font-size: 20px; }
+.records-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 12px; }
+.record {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 8px;
+  background: var(--bg-2);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.record img { width: 64px; height: 64px; object-fit: contain; filter: brightness(0); opacity: .25; }
+.record.got img { filter: none; opacity: 1; }
+.record-name { font-weight: 700; font-size: 14px; }
+.record:not(.got) .record-name { color: var(--muted); }
+.record-count { font-size: 22px; font-weight: 800; color: var(--accent); }
+.record:not(.got) .record-count { font-size: 13px; font-weight: 600; color: var(--muted); }
+.record-session { font-size: 12px; color: var(--ok); font-weight: 600; }
+
+/* the crown of the last song's winner, with the songs won in a row */
+.crown-icon { width: 24px; height: 20px; flex: none; }
+.crown-label { display: inline-flex; align-items: center; gap: 3px; font-weight: 800; color: #fcc626; font-size: 14px; }
+.crown-badge { display: inline-flex; align-items: center; flex-shrink: 0; }
+.records-title { display: flex; align-items: center; gap: 8px; }
+.crown-now { margin: 2px 0 6px; color: #fcc626; font-weight: 600; font-size: 14px; }
+.streak { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 12px 14px; background: var(--bg-2); border-radius: var(--radius); }
+.streak .crown-icon { width: 40px; height: 34px; }
+.streak > div:nth-child(2) { flex: 1; }
+.streak .summary { margin: 0; }
+.streak.none .crown-icon { filter: brightness(0); opacity: .25; }

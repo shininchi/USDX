@@ -213,6 +213,7 @@ uses
   USongRequests     in 'base\USongRequests.pas',
   USongRequestsServer in 'base\USongRequestsServer.pas',
   UMicTaps          in 'base\UMicTaps.pas',
+  URatings          in 'base\URatings.pas',
   UVoiceCommands    in 'base\UVoiceCommands.pas',
   UCommandLine      in 'base\UCommandLine.pas',
   URingBuffer       in 'base\URingBuffer.pas',

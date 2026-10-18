@@ -6,7 +6,12 @@ const LANG = (navigator.language || 'es').toLowerCase().startsWith('es') ? 'es' 
 
 const TEXTS = {
   es: {
-    brand: 'Cancionero', page_title: 'UltraStar - Cancionero', tab_songs: 'Canciones', tab_queue: 'Cola',
+    brand: 'Cancionero', page_title: 'UltraStar - Cancionero', tab_songs: 'Canciones', tab_queue: 'Cola', tab_inqueue: 'En cola', tab_records: 'Logros',
+    records_title: n => `Logros de ${n}`, records_text: 'Las calificaciones que has conseguido cantando. Las que te faltan se ven como silueta.',
+    records_nick: 'Dinos tu apodo para ver tus logros.', crown_now: n => n > 1 ? `Tienes la corona: ${n} canciones ganadas seguidas` : 'Tienes la corona: has ganado la última canción',
+    best_streak: 'Mejor racha', streak_none: 'Aún no has ganado ninguna canción', streak_songs: n => `${n} ${n === 1 ? 'canción ganada' : 'canciones ganadas seguidas'}`, records_session: n => `Hoy: ${n}`, records_never: 'Aún no',
+    rating_0: 'Desafinado', rating_1: 'Aficionado', rating_2: 'Mejorando', rating_3: 'Promesa',
+    rating_4: 'Cantante', rating_5: 'Gran Cantante', rating_6: 'Superestrella', rating_7: 'Ultraestrella',
     lucky: 'Canción al azar', lucky_spinning: 'Girando…',
     mic: 'Micrófono', mic_title: 'Elige tu micrófono',
     mic_text: 'Tus puntuaciones se guardarán con tu apodo en el micrófono que elijas.',
@@ -83,7 +88,12 @@ const TEXTS = {
     ago_s: s => `hace ${s} s`, ago_m: m => `hace ${m} min`, ago_h: h => `hace ${h} h`, ago_d: d => `hace ${d} d`,
   },
   en: {
-    brand: 'Songbook', page_title: 'UltraStar - Songbook', tab_songs: 'Songs', tab_queue: 'Queue',
+    brand: 'Songbook', page_title: 'UltraStar - Songbook', tab_songs: 'Songs', tab_queue: 'Queue', tab_inqueue: 'In queue', tab_records: 'Achievements',
+    records_title: n => `${n}'s achievements`, records_text: 'The ratings you got singing. The ones you are missing show as a silhouette.',
+    records_nick: 'Tell us your nickname to see your achievements.', crown_now: n => n > 1 ? `You hold the crown: ${n} songs won in a row` : 'You hold the crown: you won the last song',
+    best_streak: 'Best streak', streak_none: 'You have not won a song yet', streak_songs: n => `${n} ${n === 1 ? 'song won' : 'songs won in a row'}`, records_session: n => `Today: ${n}`, records_never: 'Not yet',
+    rating_0: 'Tone Deaf', rating_1: 'Amateur', rating_2: 'Wannabe', rating_3: 'Hopeful',
+    rating_4: 'Rising Star', rating_5: 'Lead Singer', rating_6: 'Superstar', rating_7: 'Ultrastar',
     lucky: 'Random song', lucky_spinning: 'Spinning…',
     mic: 'Microphone', mic_title: 'Pick your microphone',
     mic_text: 'Your scores will be saved with your nickname on the microphone you pick.',

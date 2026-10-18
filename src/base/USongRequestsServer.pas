@@ -626,6 +626,8 @@ begin
       end
       else if (URLPath = '/api/unvote') and (Method = 'POST') then
         SendResult(AResponse, SongRequests.WithdrawVote(UserId, BodyInt('id')))
+      else if (URLPath = '/api/records') and (Method = 'GET') then
+        SendJSON(AResponse, 200, SongRequests.RecordsJSON(UserId))
       else if (URLPath = '/api/mics') and (Method = 'GET') then
         SendJSON(AResponse, 200, SongRequests.MicsJSON(UserId))
       else if (URLPath = '/api/mic') and (Method = 'POST') then

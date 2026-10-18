@@ -221,6 +221,7 @@ implementation
 uses
   UAvatars,
   UPlayerSlots,
+  URatings,
   UGraphic,
   UHelp,
   ULanguage,
@@ -1154,8 +1155,9 @@ begin
 
   inherited;
 
-  // the crown of the song selection
+  // the crown of the song selection, and the ratings each player got
   PlayerSlotsSongFinished;
+  RecordRatings;
 
   // intially show total score
   CurrentRound := Length(PlaylistMedley.Stats)-1;
