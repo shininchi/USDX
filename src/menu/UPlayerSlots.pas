@@ -1,0 +1,522 @@
+{* UltraStar Deluxe - Karaoke Game
+ *
+ * UltraStar Deluxe is the legal property of its developers, whose names
+ * are too numerous to list here. Please refer to the COPYRIGHT
+ * file distributed with this source distribution.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; see the file COPYING. If not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+ *}
+
+unit UPlayerSlots;
+
+{*
+ * One box per player at the bottom left of the song selection: the
+ * player's number in a box of the player's color, filled and with the name
+ * below when the player has a name of their own (not the default
+ * "PlayerN"), and a crown over the winners of the last song.
+ *
+ * It also turns taps on the microphones (UMicTaps) into commands: the box
+ * of the microphone flashes on each tap, and while singing three taps
+ * pause or resume the song and four or more leave it, after a few seconds
+ * in which another tap cancels.
+ *}
+
+interface
+
+{$IFDEF FPC}
+  {$MODE Delphi}
+{$ENDIF}
+
+{$I switches.inc}
+
+// main loop, every frame: microphone capture and tap commands
+procedure PlayerSlotsTick;
+// overlay, every frame
+procedure PlayerSlotsDraw;
+// the score screen tells who won the song
+procedure PlayerSlotsSongFinished;
+
+implementation
+
+uses
+  Math,
+  SysUtils,
+  sdl2,
+  UDisplay,
+  UGraphic,
+  UIni,
+  ULanguage,
+  ULog,
+  UMicTaps,
+  UMusic,
+  UCommon,
+  UNote,
+  URecord,
+  URenderer,
+  UText,
+  UThemes;
+
+const
+  BOX_SIZE     = 30;
+  MAX_SLOT_W   = 64;   // room of each player, less when it would not fit
+  BOX_RADIUS   = 6;
+  BORDER       = 3;
+  ROW_OFFSET   = 116;  // top of the boxes above the screen bottom, clear of the help bar
+  FLASH_MS     = 250;
+  SERIES_MS    = 1500; // "x3" shown over the box after a series
+  LEAVE_MS     = 3000; // time to cancel leaving the song
+  // names wider than their room scroll to the end and start over
+  SCROLL_SPEED = 30;   // pixels per second
+  SCROLL_WAIT  = 1200; // ms still at the start and at the end
+
+var
+  Winner:       array[0..IMaxPlayerCount-1] of boolean;
+  SeriesCount:  array[0..IMaxPlayerCount-1] of integer;
+  SeriesTicks:  array[0..IMaxPlayerCount-1] of cardinal;
+  LeaveAt:      cardinal;  // SDL ticks when the song is left, 0 = not leaving
+  RestartedAt:  cardinal;  // SDL ticks of the last capture restart
+  CaptureOurs:  boolean;   // the song selection started the capture
+
+// ms since Ticks; 0 when Ticks is newer (set by another thread) - plain
+// cardinal subtraction would raise an overflow error then
+function Elapsed(Ticks: cardinal): int64;
+begin
+  Result := Max(0, int64(SDL_GetTicks) - int64(Ticks));
+end;
+
+function DefaultName(Player: integer): UTF8String;
+begin
+  Result := 'Player' + IntToStr(Player + 1);
+end;
+
+function HasName(Player: integer): boolean;
+begin
+  Result := (Trim(Ini.Name[Player]) <> '') and
+            not SameText(Trim(Ini.Name[Player]), DefaultName(Player));
+end;
+
+var
+  SlotW: single = MAX_SLOT_W;
+
+// the boxes stay left of the selected song's cover
+procedure UpdateSlotWidth(Count: integer);
+var
+  Right: single;
+begin
+  Right := Theme.Song.Cover.X - 8;
+  if (Right < 200) or (Right > RenderW / 2) then
+    Right := 300;
+  SlotW := Min(MAX_SLOT_W, (Right - 16) / Count);
+end;
+
+function SlotCount: integer;
+begin
+  Result := Min(PlayersPlay, IMaxPlayerCount);
+  if Result < 1 then
+    Result := 1;
+end;
+
+procedure PlayerSlotsSongFinished;
+var
+  I, Best: integer;
+begin
+  Best := 0;
+  for I := 0 to High(Player) do
+    Best := Max(Best, Player[I].ScoreTotalInt);
+  for I := 0 to High(Winner) do
+    Winner[I] := (Length(Player) >= 2) and (Best > 0) and (I <= High(Player)) and
+                 (Player[I].ScoreTotalInt = Best);
+end;
+
+{ commands }
+
+procedure SingCommand(Player, Count: integer);
+begin
+  if LeaveAt <> 0 then
+  begin
+    // any tap series cancels leaving the song
+    LeaveAt := 0;
+    Log.LogStatus(Format('Player %d cancelled leaving the song', [Player + 1]), 'MicTaps');
+    Exit;
+  end;
+  if Count = 3 then
+  begin
+    Log.LogStatus(Format('Player %d paused/resumed the song', [Player + 1]), 'MicTaps');
+    ScreenSing.Pause;
+  end
+  else if Count >= 4 then
+  begin
+    Log.LogStatus(Format('Player %d is leaving the song', [Player + 1]), 'MicTaps');
+    LeaveAt := SDL_GetTicks + LEAVE_MS;
+  end;
+end;
+
+// one tap outside the songs
+procedure SingleTap(Player: integer);
+begin
+  if Display.NextScreen <> nil then
+    Exit;
+  if Display.CurrentScreen = @ScreenSong then
+    // like the N key: the next song request
+    Display.ParseInput(SDLK_N, 0, true)
+  else if (Display.CurrentScreen = @ScreenScore) or (Display.CurrentScreen = @ScreenHighScores) then
+    // like Enter: on to the next screen
+    Display.ParseInput(SDLK_RETURN, 0, true);
+end;
+
+procedure HandleEvents;
+var
+  Event: TMicTapEvent;
+  Singing: boolean;
+begin
+  Singing := (Display.CurrentScreen = @ScreenSing) and (Display.NextScreen = nil);
+  while MicTapsPop(Event) do
+  begin
+    if (Event.Kind = mtLevel) and (Event.Count = -1) then
+    begin
+      Log.LogStatus(Format('Hearing the microphone of player %d', [Event.Player + 1]), 'MicTaps');
+      Continue;
+    end;
+    if Event.Kind = mtLevel then
+    begin
+      Log.LogStatus(Format('Level on player %d: %.2f', [Event.Player + 1, Event.Peak]), 'MicTaps');
+      Continue;
+    end;
+    if Event.Kind = mtRejected then
+    begin
+      Log.LogStatus(Format('Not a tap on player %d: level %.2f, still loud after %d ms',
+        [Event.Player + 1, Event.Peak, Event.DecayMs]), 'MicTaps');
+      Continue;
+    end;
+    if Event.Kind = mtTap then
+    begin
+      Log.LogStatus(Format('Tap on player %d: level %.2f, faded in %d ms',
+        [Event.Player + 1, Event.Peak, Event.DecayMs]), 'MicTaps');
+      Continue;
+    end;
+    Log.LogStatus(Format('Player %d tapped %d times', [Event.Player + 1, Event.Count]), 'MicTaps');
+    if (Event.Player >= 0) and (Event.Player < IMaxPlayerCount) then
+    begin
+      SeriesCount[Event.Player] := Event.Count;
+      SeriesTicks[Event.Player] := SDL_GetTicks;
+    end;
+    if Singing then
+      SingCommand(Event.Player, Event.Count)
+    else if Event.Count = 1 then
+      SingleTap(Event.Player);
+  end;
+end;
+
+procedure PlayerSlotsTick;
+var
+  OnSongs: boolean;
+begin
+  if (AudioInput = nil) or not MicTapsEnabled then
+    Exit;
+
+  // the song selection listens to the microphones too; singing starts and
+  // stops the capture by itself
+  // also the scores after a song, where a tap is like Enter
+  OnSongs := ((Display.CurrentScreen = @ScreenSong) or (Display.CurrentScreen = @ScreenScore) or
+              (Display.CurrentScreen = @ScreenHighScores)) and (Display.NextScreen = nil);
+  if OnSongs and not AudioCaptureRunning then
+  begin
+    Log.LogStatus('Listening to the microphones', 'MicTaps');
+    AudioInput.CaptureStart;
+    CaptureOurs := true;
+  end
+  else if CaptureOurs and not OnSongs and (Display.CurrentScreen <> @ScreenSing) and
+          (Display.NextScreen = nil) then
+  begin
+    if AudioCaptureRunning then
+      AudioInput.CaptureStop;
+    CaptureOurs := false;
+  end;
+  if Display.CurrentScreen = @ScreenSing then
+    CaptureOurs := false;
+
+  // a microphone stopped sending sound (some stop after a hard knock):
+  // reopen the capture, also while singing
+  if AudioCaptureRunning and AudioCaptureStalled(1500) and
+     (Elapsed(RestartedAt) > 3000) then
+  begin
+    Log.LogWarn('A microphone stopped sending sound, restarting the capture', 'MicTaps');
+    RestartedAt := SDL_GetTicks;
+    AudioInput.CaptureStart;
+  end;
+
+  HandleEvents;
+
+  if (LeaveAt <> 0) and (SDL_GetTicks >= LeaveAt) then
+  begin
+    LeaveAt := 0;
+    if Display.CurrentScreen = @ScreenSing then
+      Display.ParseInput(SDLK_ESCAPE, 0, true);
+  end;
+  if Display.CurrentScreen <> @ScreenSing then
+    LeaveAt := 0;
+end;
+
+{ drawing }
+
+procedure DrawRoundedBox(X, Y, W, H, R: single; Col: TRGB; Alpha: single);
+const
+  STEPS = 6;
+var
+  I, C: integer;
+  CX, CY, A1, A2: single;
+begin
+  // printing text turns the depth test back on, which would hide the
+  // shapes behind the song screen's equalizer
+  Renderer.DepthTest := false;
+  Renderer.DrawQuad(X + R, Y, 0, W - 2 * R, H, Col.R, Col.G, Col.B, Alpha);
+  Renderer.DrawQuad(X, Y + R, 0, R, H - 2 * R, Col.R, Col.G, Col.B, Alpha);
+  Renderer.DrawQuad(X + W - R, Y + R, 0, R, H - 2 * R, Col.R, Col.G, Col.B, Alpha);
+  for C := 0 to 3 do
+  begin
+    if C in [0, 3] then CX := X + R else CX := X + W - R;
+    if C in [0, 1] then CY := Y + R else CY := Y + H - R;
+    for I := 0 to STEPS - 1 do
+    begin
+      A1 := (C * 90 + 180 + I * 90 / STEPS) * Pi / 180;
+      A2 := (C * 90 + 180 + (I + 1) * 90 / STEPS) * Pi / 180;
+      Renderer.DrawTriangle(CX, CY, CX + R * Cos(A1), CY + R * Sin(A1),
+        CX + R * Cos(A2), CY + R * Sin(A2), 0, Col.R, Col.G, Col.B, Alpha);
+    end;
+  end;
+end;
+
+procedure DrawDisc(CX, CY, R: single; ColR, ColG, ColB: single);
+const
+  STEPS = 10;
+var
+  I: integer;
+  A1, A2: single;
+begin
+  for I := 0 to STEPS - 1 do
+  begin
+    A1 := I * 2 * Pi / STEPS;
+    A2 := (I + 1) * 2 * Pi / STEPS;
+    Renderer.DrawTriangle(CX, CY, CX + R * Cos(A1), CY + R * Sin(A1),
+      CX + R * Cos(A2), CY + R * Sin(A2), 0, ColR, ColG, ColB, 1);
+  end;
+end;
+
+{ A gold crown with a dark outline: a band and three points ending in
+  balls, the middle one higher. Shape in a 24 x 18 box, Grow makes it
+  bigger all around (for the outline). }
+procedure DrawCrownShape(L, T, Grow: single; ColR, ColG, ColB: single; BandDarker: boolean);
+const
+  // the zigzag of the top, left to right: tip, valley, tip, valley, tip
+  ZX: array[0..4] of single = (2.5, 7.5, 12, 16.5, 21.5);
+  ZY: array[0..4] of single = (4, 9.5, 2.5, 9.5, 4);
+  BAND_TOP = 12;
+  BOTTOM = 18;
+var
+  I: integer;
+  G: single;
+  PX, PY: array[0..6] of single;
+begin
+  G := Grow;
+  // body: under each piece of the outline down to the band
+  PX[0] := 0.5 - G;  PY[0] := BAND_TOP;
+  for I := 0 to 4 do
+  begin
+    PX[I + 1] := ZX[I];
+    PY[I + 1] := ZY[I] - G;
+  end;
+  PX[6] := 23.5 + G; PY[6] := BAND_TOP;
+  for I := 0 to 5 do
+  begin
+    Renderer.DrawTriangle(L + PX[I], T + PY[I], L + PX[I + 1], T + PY[I + 1],
+      L + PX[I + 1], T + BAND_TOP + 0.5, 0, ColR, ColG, ColB, 1);
+    Renderer.DrawTriangle(L + PX[I], T + PY[I], L + PX[I + 1], T + BAND_TOP + 0.5,
+      L + PX[I], T + BAND_TOP + 0.5, 0, ColR, ColG, ColB, 1);
+  end;
+  // balls on the tips
+  for I := 0 to 2 do
+    DrawDisc(L + ZX[I * 2], T + ZY[I * 2] - 1, 2.2 + G, ColR, ColG, ColB);
+  // band
+  if BandDarker then
+    Renderer.DrawQuad(L - G, T + BAND_TOP - G, 0, 24 + 2 * G, BOTTOM - BAND_TOP + 2 * G,
+      0.96, 0.62, 0.12, 1)
+  else
+    Renderer.DrawQuad(L - G, T + BAND_TOP - G, 0, 24 + 2 * G, BOTTOM - BAND_TOP + 2 * G,
+      ColR, ColG, ColB, 1);
+end;
+
+procedure DrawCrown(CX, Bottom: single);
+var
+  L, T: single;
+begin
+  Renderer.DepthTest := false;
+  L := CX - 12;
+  T := Bottom - 18;
+  DrawCrownShape(L, T, 1.6, 0.2, 0.12, 0.02, false);   // outline
+  DrawCrownShape(L, T, 0, 1.0, 0.80, 0.22, true);      // gold, the band more orange
+  // shine on the upper part
+  Renderer.DrawQuad(L + 3, T + 11, 0, 18, 1, 1.0, 0.92, 0.6, 0.8);
+end;
+
+// offset of a name scrolling from its start to its end and starting over
+function ScrollOffset(Overflow: single; Ticks: cardinal): single;
+var
+  ScrollMs, Cycle, T: cardinal;
+begin
+  ScrollMs := Round(Overflow * 1000 / SCROLL_SPEED);
+  Cycle := 2 * SCROLL_WAIT + ScrollMs;
+  T := Ticks mod Cycle;
+  if T < SCROLL_WAIT then
+    Result := 0
+  else if T < SCROLL_WAIT + ScrollMs then
+    Result := Overflow * (T - SCROLL_WAIT) / ScrollMs
+  else
+    Result := Overflow;
+end;
+
+procedure DrawName(const Name: UTF8String; Left, Top: single; Col: TRGB; Ticks: cardinal);
+var
+  W, Room: single;
+begin
+  SetFontStyle(ftRegular);
+  SetFontSize(13);
+  SetFontColor(Col.R, Col.G, Col.B, 1);
+  W := TextWidth(Name);
+  Room := SlotW - 4;
+  if W <= Room then
+  begin
+    SetFontPos(Left + (SlotW - W) / 2, Top);
+    PrintText(Name);
+    Exit;
+  end;
+  // too long: show it through the room of the player, scrolling
+  Renderer.SetScissorRect(
+    Round((Left + 2) * ((ScreenW / RenderW) / Screens) + ((ScreenAct - 1) * (ScreenW / 2))),
+    Round((RenderH - (Top + 20)) * (ScreenH / RenderH)),
+    Round(Room * ScreenW / RenderW),
+    Round(20 * ScreenH / RenderH));
+  Renderer.ScissorTest := true;
+  SetFontPos(Left + 2 - ScrollOffset(W - Room, Ticks), Top);
+  PrintText(Name);
+  Renderer.ScissorTest := false;
+end;
+
+procedure DrawLeaveNotice;
+var
+  Seconds: integer;
+  Text: UTF8String;
+  W, X, Y: single;
+  DepthTest: boolean;
+begin
+  if (LeaveAt = 0) or (Display.CurrentScreen <> @ScreenSing) then
+    Exit;
+  Seconds := Max(1, (int64(LeaveAt) - int64(SDL_GetTicks) + 999) div 1000);
+  Text := Format(Language.Translate('MICTAPS_LEAVING'), [Seconds]);
+  SetFontFamily(0);
+  SetFontStyle(ftBold);
+  SetFontItalic(false);
+  SetFontSize(24);
+  W := TextWidth(Text) + 40;
+  X := (RenderW - W) / 2;
+  Y := RenderH / 2 - 24;
+  DepthTest := Renderer.DepthTest;
+  Renderer.DepthTest := false;
+  Renderer.DrawQuad(X, Y, 0, W, 48, 0.05, 0.05, 0.1, 0.85);
+  SetFontColor(1, 1, 1, 1);
+  SetFontPos(X + 20, Y + 9);
+  PrintText(Text);
+  Renderer.DepthTest := DepthTest;
+end;
+
+procedure PlayerSlotsDraw;
+var
+  I, N:     integer;
+  X, Y, CX: single;
+  Col:      TRGB;
+  Black:    TRGB;
+  Flash:    single;
+  Ticks:    cardinal;
+  Text:     UTF8String;
+  DepthTest: boolean;
+begin
+  DrawLeaveNotice;
+  if (Display.CurrentScreen <> @ScreenSong) or (Display.NextScreen <> nil) then
+    Exit;
+
+  Ticks := SDL_GetTicks;
+  N := SlotCount;
+  UpdateSlotWidth(N);
+  Black.R := 0; Black.G := 0; Black.B := 0;
+  Y := RenderH - ROW_OFFSET;
+
+  DepthTest := Renderer.DepthTest;
+  Renderer.DepthTest := false;
+  SetFontFamily(0);
+  SetFontItalic(false);
+
+  for I := 0 to N - 1 do
+  begin
+    CX := 16 + I * SlotW + SlotW / 2;
+    X := CX - BOX_SIZE / 2;
+    Col := GetPlayerColor(Ini.PlayerColor[I]);
+
+    // a tap flashes the box white
+    Flash := 0;
+    if (MicTapLastTicks(I) <> 0) and (Elapsed(MicTapLastTicks(I)) < FLASH_MS) then
+      Flash := 1 - Elapsed(MicTapLastTicks(I)) / FLASH_MS;
+
+    DrawRoundedBox(X, Y, BOX_SIZE, BOX_SIZE, BOX_RADIUS, Col, 1);
+    if not HasName(I) then
+      DrawRoundedBox(X + BORDER, Y + BORDER, BOX_SIZE - 2 * BORDER, BOX_SIZE - 2 * BORDER,
+        BOX_RADIUS - 2, Black, 1);
+    if Flash > 0 then
+    begin
+      Black.R := 1; Black.G := 1; Black.B := 1;
+      DrawRoundedBox(X, Y, BOX_SIZE, BOX_SIZE, BOX_RADIUS, Black, 0.8 * Flash);
+      Black.R := 0; Black.G := 0; Black.B := 0;
+    end;
+
+    if Winner[I] then
+      DrawCrown(CX, Y - 4);
+
+    // number in the middle
+    SetFontStyle(ftBold);
+    SetFontSize(20);
+    Text := IntToStr(I + 1);
+    SetFontColor(1, 1, 1, 1);
+    SetFontPos(CX - TextWidth(Text) / 2, Y + 3);
+    PrintText(Text);
+
+    // the player's name below
+    if HasName(I) then
+      DrawName(Ini.Name[I], CX - SlotW / 2, Y + BOX_SIZE + 1, Col, Ticks);
+
+    // the number of taps of the last series, for a moment
+    if (SeriesTicks[I] <> 0) and (Elapsed(SeriesTicks[I]) < SERIES_MS) then
+    begin
+      SetFontStyle(ftBold);
+      SetFontSize(15);
+      Text := 'x' + IntToStr(SeriesCount[I]);
+      SetFontColor(1, 1, 1, 1 - Elapsed(SeriesTicks[I]) / SERIES_MS);
+      SetFontPos(CX - TextWidth(Text) / 2, Y - 34);
+      PrintText(Text);
+    end;
+  end;
+
+  Renderer.DepthTest := DepthTest;
+end;
+
+end.

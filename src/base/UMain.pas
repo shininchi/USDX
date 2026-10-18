@@ -103,6 +103,8 @@ uses
   USongRequests,
   USongRequestsOverlay,
   USongRequestsServer,
+  UMicTaps,
+  UPlayerSlots,
   UTime,
   UWebcam;
   //UVideoAcinerella;
@@ -246,6 +248,8 @@ begin
       *}
     SoundLib.StartBgMusic;
 
+    MicTapsLoadConfig;
+
     // song requests from guests' phones
     Log.LogStatus('Song Requests', 'Initialization');
     StartSongRequests;
@@ -334,6 +338,7 @@ begin
 
       if (SongRequests <> nil) then
         SongRequests.Tick;
+      PlayerSlotsTick;
 
       // display
       Done := not Display.Draw;

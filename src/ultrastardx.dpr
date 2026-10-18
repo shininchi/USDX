@@ -163,6 +163,7 @@ uses
   //------------------------------
   UDisplay               in 'menu\UDisplay.pas',
   USongRequestsOverlay   in 'menu\USongRequestsOverlay.pas',
+  UPlayerSlots           in 'menu\UPlayerSlots.pas',
   UMenu                  in 'menu\UMenu.pas',
   UMenuStatic            in 'menu\UMenuStatic.pas',
   UMenuText              in 'menu\UMenuText.pas',
@@ -211,6 +212,7 @@ uses
   UPlaylist         in 'base\UPlaylist.pas',
   USongRequests     in 'base\USongRequests.pas',
   USongRequestsServer in 'base\USongRequestsServer.pas',
+  UMicTaps          in 'base\UMicTaps.pas',
   UCommandLine      in 'base\UCommandLine.pas',
   URingBuffer       in 'base\URingBuffer.pas',
   USingScores       in 'base\USingScores.pas',

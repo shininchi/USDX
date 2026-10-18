@@ -81,6 +81,7 @@ type
       function CircularAverageMagnitudeDifference(): TCorrelationArray;
       function ArrayIndexOfMinimum(const AValues: array of real): Integer;
     public
+      PlayerIndex: integer; // player whose microphone fills this buffer
       AnalysisBuffer:  array[0..4095] of smallint; // newest 4096 samples (MUST BE POWER OF TWO!)
       AnalysisBufferSize: integer; // number of samples of BufferArray to analyze
 
@@ -126,6 +127,8 @@ type
       MicSource:     integer;  // source-index of mic (-1: none detected)
 
       AudioFormat:     TAudioFormatInfo; // capture format info (e.g. 44.1kHz SInt16 stereo)
+      Capturing:       boolean;  // started by CaptureStart
+      LastDataTicks:   cardinal; // SDL ticks of the last samples received
       CaptureChannel:  array of TCaptureBuffer; // sound-buffer references used for mono or stereo channel's capture data
 
       destructor Destroy; override;
@@ -212,10 +215,19 @@ type
 
   function AudioInputProcessor(): TAudioInputProcessor;
 
+var
+  // true while the microphones are captured (between CaptureStart and CaptureStop)
+  AudioCaptureRunning: boolean = false;
+
+// a captured device sent no samples for this long (some USB microphones
+// stop streaming after a hard knock and only come back when reopened)
+function AudioCaptureStalled(TimeoutMs: cardinal): boolean;
+
 implementation
 
 uses
   ULog,
+  UMicTaps,
   UNote;
 
 var
@@ -324,6 +336,10 @@ begin
   // TODO: support float too
   if (AudioFormat.Format <> asfS16) then
     Exit;
+
+  // taps on the microphone used as commands
+  MicTapsProcess(PlayerIndex, PSmallInt(Buffer), BufferSize div SizeOf(SmallInt),
+    Round(AudioFormat.SampleRate));
 
   // process BufferArray
   BufferOffset := 0;
@@ -617,7 +633,10 @@ begin
   inherited;
   SetLength(Sound, UIni.IMaxPlayerCount);
   for i := 0 to High(Sound) do
+  begin
     Sound[i] := TCaptureBuffer.Create;
+    Sound[i].PlayerIndex := i;
+  end;
 end;
 
 destructor TAudioInputProcessor.Destroy;
@@ -824,6 +843,7 @@ var
   SourcePtr:               PByte;
   DestPtr:                 PByte;
 begin
+  InputDevice.LastDataTicks := SDL_GetTicks;
   AudioFormat := InputDevice.AudioFormat;
   if (AudioFormat = nil) then
     Exit;
@@ -870,6 +890,26 @@ begin
   finally
     FreeMem(SingleChannelBuffer);
   end;
+end;
+
+function AudioCaptureStalled(TimeoutMs: cardinal): boolean;
+var
+  I: integer;
+  Now, Last: int64;
+begin
+  Result := false;
+  Now := SDL_GetTicks;
+  for I := 0 to High(AudioInputProcessor.DeviceList) do
+    if Assigned(AudioInputProcessor.DeviceList[I]) and AudioInputProcessor.DeviceList[I].Capturing then
+    begin
+      // set by the audio threads, it can be a bit newer than Now
+      Last := AudioInputProcessor.DeviceList[I].LastDataTicks;
+      if Now - Last > TimeoutMs then
+      begin
+        Result := true;
+        Exit;
+      end;
+    end;
 end;
 
 { TAudioInputBase }
@@ -965,6 +1005,8 @@ begin
       begin
         Device.LinkCaptureBuffer(ChannelIndex, AudioInputProcessor.Sound[Player]);
         DeviceUsed := true;
+        Log.LogStatus(Format('%s, channel %d: player %d', [Device.Name, ChannelIndex + 1, Player + 1]),
+          'TAudioInputBase.CaptureStart');
       end;
     end;
 
@@ -972,13 +1014,15 @@ begin
     if (DeviceUsed) then
     begin
       //Log.BenchmarkStart(2);
-      Device.Start();
+      Device.LastDataTicks := SDL_GetTicks;
+      Device.Capturing := Device.Start();
       //Log.BenchmarkEnd(2);
       //Log.LogBenchmark('Device.Start', 2) ;
     end;
   end;
 
   Started := true;
+  AudioCaptureRunning := true;
 end;
 
 {*
@@ -998,6 +1042,7 @@ begin
       continue;
 
     Device.Stop();
+    Device.Capturing := false;
 
     // disconnect capture buffers
     DeviceCfg := @Ini.InputDeviceConfig[Device.CfgIndex];
@@ -1006,6 +1051,7 @@ begin
   end;
 
   Started := false;
+  AudioCaptureRunning := false;
 end;
 
 function TAudioInputBase.UnifyDeviceName(const name: UTF8String; deviceIndex: integer): UTF8String;

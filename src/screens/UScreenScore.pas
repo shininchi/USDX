@@ -220,6 +220,7 @@ implementation
 
 uses
   UAvatars,
+  UPlayerSlots,
   UGraphic,
   UHelp,
   ULanguage,
@@ -1152,6 +1153,9 @@ begin
   //SoundLib.StartBgMusic; -- now play current song
 
   inherited;
+
+  // the crown of the song selection
+  PlayerSlotsSongFinished;
 
   // intially show total score
   CurrentRound := Length(PlaylistMedley.Stats)-1;

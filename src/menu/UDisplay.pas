@@ -177,7 +177,8 @@ uses
   UTime,
   ULanguage,
   UPathUtils,
-  USongRequestsOverlay
+  USongRequestsOverlay,
+  UPlayerSlots
   {$IFDEF MSWINDOWS}
   ,Windows
   {$ENDIF}
@@ -492,6 +493,8 @@ begin
 
     if not BlackScreen then
     begin
+      // the player boxes go over everything but the song request notices
+      PlayerSlotsDraw;
       SongRequestsDrawOverlay;
       DrawCursor;
     end;
