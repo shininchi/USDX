@@ -70,6 +70,7 @@ uses
   URenderer,
   UText,
   UThemes,
+  USongRequests,
   UVoiceCommands;
 
 const
@@ -92,6 +93,7 @@ var
   SeriesTicks:  array[0..IMaxPlayerCount-1] of cardinal;
   LeaveAt:      cardinal;  // SDL ticks when the song is left, 0 = not leaving
   RestartedAt:  cardinal;  // SDL ticks of the last capture restart
+  MicsSentAt:   cardinal;  // SDL ticks when the web pages got the microphones
   CaptureOurs:  boolean;   // the song selection started the capture
 
 // ms since Ticks; 0 when Ticks is newer (set by another thread) - plain
@@ -131,6 +133,16 @@ begin
   Result := Min(PlayersPlay, IMaxPlayerCount);
   if Result < 1 then
     Result := 1;
+end;
+
+// players set in the options (the song selection uses the same), also
+// before the song selection was shown
+function ConfiguredPlayers: integer;
+begin
+  if Ini.Players <= 3 then
+    Result := Ini.Players + 1
+  else
+    Result := 6;
 end;
 
 procedure PlayerSlotsSongFinished;
@@ -206,10 +218,52 @@ begin
   end;
 end;
 
+// the microphones for the web pages: changes asked for there, and the names
+// and colors to show
+procedure SyncWebMics;
+var
+  Changes: TSRMicChanges;
+  Mics: array of TSRMic;
+  I: integer;
+  Col: TRGB;
+  Changeable: boolean;
+begin
+  if SongRequests = nil then
+    Exit;
+  Changes := SongRequests.TakeMicChanges;
+  for I := 0 to High(Changes) do
+    if Changes[I].Player < ConfiguredPlayers then
+    begin
+      Log.LogStatus(Format('Microphone %d set to "%s" in the web page', [Changes[I].Player + 1, Changes[I].Name]), 'MicTaps');
+      AssignMic(Changes[I].Player, Changes[I].Name);
+    end;
+  if (Length(Changes) = 0) and (Elapsed(MicsSentAt) < 250) then
+    Exit;
+  MicsSentAt := SDL_GetTicks;
+
+  SetLength(Mics, ConfiguredPlayers);
+  for I := 0 to High(Mics) do
+  begin
+    if IsDefaultName(Ini.Name[I]) then
+      Mics[I].Name := ''
+    else
+      Mics[I].Name := Trim(Ini.Name[I]);
+    Col := GetPlayerColor(Ini.PlayerColor[I]);
+    Mics[I].Color := Format('#%.2x%.2x%.2x', [Round(Col.R * 255), Round(Col.G * 255), Round(Col.B * 255)]);
+  end;
+  // in the song selection, or with the song paused
+  Changeable := (Display.NextScreen = nil) and
+    ((Display.CurrentScreen = @ScreenSong) or
+     ((Display.CurrentScreen = @ScreenSing) and ScreenSing.Paused));
+  SongRequests.SetMics(Mics, Changeable);
+end;
+
 procedure PlayerSlotsTick;
 var
   OnSongs: boolean;
 begin
+  SyncWebMics;
+
   if (AudioInput = nil) or not MicTapsEnabled then
     Exit;
 

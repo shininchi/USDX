@@ -135,8 +135,14 @@ header.top.compact .brand span { display: none; }
 
 .tabs button {
   flex: 1;
+  min-width: 0;
+  padding-left: 6px;
+  padding-right: 6px;
   background: var(--bg-2);
   border-radius: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tabs button.active {
@@ -683,3 +689,52 @@ body.lucky-open .qblock.floating { display: none; }
 .reel-strip.spinning { filter: blur(2px); }
 .reel-caption { text-align: center; color: var(--muted); font-weight: 600; }
 .detail.appear { animation: up .25s ease-out; }
+
+/* microphone of the guest, next to the nickname */
+
+.mic-chip { padding: 4px 8px; }
+.mic-box {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 2px solid #8a8fa8;
+  background: #000;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  flex: none;
+}
+.mic-box.taken { text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+.mic-box.big { width: 52px; height: 52px; border-width: 4px; border-radius: 10px; font-size: 24px; }
+.mic-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+.mic-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 6px;
+  background: var(--bg-3);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+.mic-option.mine { box-shadow: inset 0 0 0 2px var(--accent); }
+.mic-option:disabled { cursor: default; }
+.mic-option:disabled:not(.mine) { opacity: .5; }
+.mic-option .mic-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* admin: microphones */
+.mic-admin { display: grid; gap: 10px; }
+.mic-row { display: flex; align-items: center; gap: 8px; }
+.mic-row input { flex: 1; min-width: 0; }
+.mic-row button { flex: none; }
+.mic-row .mic-box.big { width: 44px; height: 44px; font-size: 20px; }

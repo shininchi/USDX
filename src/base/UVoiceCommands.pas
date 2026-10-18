@@ -72,6 +72,10 @@ function VoiceBusy: boolean;             // listening or recognising
 // the last result, for a few seconds
 function VoiceLastResult(out Player: integer; out Kind: TVoiceResult;
   out Name: UTF8String; out Ticks: cardinal): boolean;
+// puts a microphone in a player's name ('' = its default name), taking the
+// name off any other microphone
+procedure AssignMic(Player: integer; const Name: UTF8String);
+function IsDefaultName(const Name: UTF8String): boolean;
 
 implementation
 
@@ -754,13 +758,27 @@ begin
     Exit;
   end;
 
-  // a name is on one microphone at a time
-  for I := 0 to High(Ini.Name) do
-    if (I <> RecPlayer) and SameText(Trim(Ini.Name[I]), Name) then
-      SetName(I, DefaultName(I));
-  SetName(RecPlayer, Name);
+  AssignMic(RecPlayer, Name);
   Log.LogStatus(Format('Microphone %d is now %s (%.2f)', [RecPlayer + 1, Name, Score]), 'Voice');
   Finish(vrHello, Name);
+end;
+
+procedure AssignMic(Player: integer; const Name: UTF8String);
+var
+  I: integer;
+begin
+  if (Player < 0) or (Player > High(Ini.Name)) then
+    Exit;
+  if Trim(Name) = '' then
+  begin
+    SetName(Player, DefaultName(Player));
+    Exit;
+  end;
+  // a name is on one microphone at a time
+  for I := 0 to High(Ini.Name) do
+    if (I <> Player) and SameText(Trim(Ini.Name[I]), Trim(Name)) then
+      SetName(I, DefaultName(I));
+  SetName(Player, Trim(Name));
 end;
 
 // the known names, as a hint for Whisper

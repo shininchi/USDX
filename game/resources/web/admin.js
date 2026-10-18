@@ -14,7 +14,7 @@ function show(id, visible) {
 function showLogin() {
   clearInterval(refreshTimer);
   show('tabs', false);
-  ['queueTab', 'usersTab', 'settingsTab', 'activityTab'].forEach(id => show(id, false));
+  ['queueTab', 'usersTab', 'micsTab', 'settingsTab', 'activityTab'].forEach(id => show(id, false));
   show('login', true);
   setTimeout(() => $('pin').focus(), 50);
 }
@@ -26,6 +26,7 @@ function setTab(tab) {
   show('usersTab', tab === 'users');
   show('settingsTab', tab === 'settings');
   show('activityTab', tab === 'activity');
+  show('micsTab', tab === 'mics');
 }
 
 async function queueAction(action, key) {
@@ -155,6 +156,42 @@ function renderBlockedIps(ips) {
     }, 'btn-ghost'))));
 }
 
+// microphones: the name on each one, editable by hand when the voice
+// recognition got it wrong
+async function setMic(n, name) {
+  try {
+    await api('/api/admin/mic', { n, name });
+    toast(t('saved'), 'ok');
+    refreshMics(true);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function renderMics(data, force) {
+  $('micsNote').textContent = data.mics.length ? t('mics_note') : t('mic_none');
+  // do not overwrite what the admin is typing
+  if (!force && $('micRows').contains(document.activeElement)) return;
+  $('micRows').replaceChildren(...data.mics.map(mic => {
+    const input = el('input', { type: 'text', maxlength: '24', list: 'knownNicks', value: mic.name, placeholder: t('mic_free') });
+    const box = el('span', { class: `mic-box big${mic.name ? ' taken' : ''}`,
+      style: `border-color: ${mic.color}; ${mic.name ? `background: ${mic.color};` : ''}`, text: String(mic.n) });
+    const form = el('form', { class: 'mic-row', onsubmit: e => { e.preventDefault(); setMic(mic.n, input.value); } },
+      box, input,
+      el('button', { class: 'btn-primary', type: 'submit', text: t('save') }),
+      el('button', { class: 'btn-ghost', type: 'button', text: t('mic_release'), disabled: !mic.name, onclick: () => setMic(mic.n, '') }));
+    return form;
+  }));
+}
+
+async function refreshMics(force = false) {
+  try {
+    renderMics(await api('/api/admin/mics'), force);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
 function renderActivity(items) {
   if (!items.length) {
     $('activityRows').replaceChildren(el('tr', {}, el('td', { class: 'sub', text: t('no_activity') })));
@@ -209,6 +246,8 @@ async function refresh(forceSettings = false) {
     renderActivity(data.activity);
     renderAdminNow(data.now);
     renderSettings(data.settings, forceSettings);
+    $('knownNicks').replaceChildren(...[...new Set(data.users.map(u => u.nick).filter(Boolean))].map(n => el('option', { value: n })));
+    refreshMics(forceSettings);
     if (!refreshTimer) refreshTimer = setInterval(() => refresh(), 5000);
   } catch (error) {
     handleError(error);

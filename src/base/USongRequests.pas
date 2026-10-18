@@ -155,9 +155,25 @@ type
     Model:         UTF8String; // device model reported by the browser, if any
   end;
 
+  // a microphone as the game shows it in the song selection
+  TSRMic = record
+    Name:  UTF8String; // '' = no player name (the default "PlayerN")
+    Color: UTF8String; // player color, #rrggbb
+  end;
+
+  TSRMicChange = record
+    Player: integer;    // 0-based
+    Name:   UTF8String; // '' = free it
+  end;
+  TSRMicChanges = array of TSRMicChange;
+
   TSongRequests = class
     private
       fLock:          TCriticalSection;
+      // microphones: published by the game, changes taken by the game
+      fMics:          array of TSRMic;
+      fMicsChangeable: boolean;
+      fMicChanges:    TSRMicChanges;
       fConfig:        TSongRequestsConfig;
       fSettings:      TSongRequestsSettings;
       fStateFile:     IPath;
@@ -305,6 +321,16 @@ type
       property GameNick: UTF8String read fGameNick write fGameNick;
       // nicknames guests chose in the web page
       procedure AddNicks(List: TStrings);
+
+      // microphones (UPlayerSlots, main thread): the game publishes their
+      // names and colors and whether they can be changed now, and applies
+      // the changes asked for in the web pages
+      procedure SetMics(const Mics: array of TSRMic; Changeable: boolean);
+      function TakeMicChanges: TSRMicChanges;
+      function MicsJSON(const UserId: UTF8String): UTF8String;
+      // Player 1-based, 0 = give back the guest's microphone
+      function RequestMic(const UserId: UTF8String; Player: integer): UTF8String;
+      function AdminSetMic(Player: integer; const Name: UTF8String): UTF8String;
   end;
 
 var
@@ -607,6 +633,145 @@ begin
     for I := 0 to fUsers.Count - 1 do
       if Trim(TSRUser(fUsers[I]).Nick) <> '' then
         List.Add(Trim(TSRUser(fUsers[I]).Nick));
+  finally
+    fLock.Leave;
+  end;
+end;
+
+procedure TSongRequests.SetMics(const Mics: array of TSRMic; Changeable: boolean);
+var
+  I: integer;
+begin
+  fLock.Enter;
+  try
+    SetLength(fMics, Length(Mics));
+    for I := 0 to High(Mics) do
+      fMics[I] := Mics[I];
+    // changes not applied yet still show
+    for I := 0 to High(fMicChanges) do
+      if fMicChanges[I].Player <= High(fMics) then
+        fMics[fMicChanges[I].Player].Name := fMicChanges[I].Name;
+    fMicsChangeable := Changeable;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.TakeMicChanges: TSRMicChanges;
+begin
+  fLock.Enter;
+  try
+    Result := fMicChanges;
+    fMicChanges := nil;
+  finally
+    fLock.Leave;
+  end;
+end;
+
+// queues a change and shows it right away (fLock held)
+procedure QueueMicChange(Owner: TSongRequests; Player: integer; const Name: UTF8String);
+var
+  N, I: integer;
+begin
+  with Owner do
+  begin
+    N := Length(fMicChanges);
+    SetLength(fMicChanges, N + 1);
+    fMicChanges[N].Player := Player;
+    fMicChanges[N].Name := Name;
+    // a name is on one microphone at a time
+    if Name <> '' then
+      for I := 0 to High(fMics) do
+        if (I <> Player) and SameText(fMics[I].Name, Name) then
+          fMics[I].Name := '';
+    fMics[Player].Name := Name;
+  end;
+end;
+
+function TSongRequests.MicsJSON(const UserId: UTF8String): UTF8String;
+var
+  Root: TJSONObject;
+  List: TJSONArray;
+  User: TSRUser;
+  Nick: UTF8String;
+  I, Mine: integer;
+begin
+  Root := TJSONObject.Create;
+  try
+    fLock.Enter;
+    try
+      User := FindUser(UserId);
+      Nick := '';
+      if User <> nil then
+        Nick := User.Nick;
+      Mine := 0;
+      List := TJSONArray.Create;
+      for I := 0 to High(fMics) do
+      begin
+        List.Add(TJSONObject.Create(['n', I + 1, 'name', fMics[I].Name, 'color', fMics[I].Color]));
+        if (Nick <> '') and SameText(fMics[I].Name, Nick) then
+          Mine := I + 1;
+      end;
+      Root.Add('mics', List);
+      Root.Add('mine', Mine);
+      Root.Add('changeable', fMicsChangeable);
+    finally
+      fLock.Leave;
+    end;
+    Result := Root.AsJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+function TSongRequests.RequestMic(const UserId: UTF8String; Player: integer): UTF8String;
+var
+  User: TSRUser;
+  I: integer;
+begin
+  fLock.Enter;
+  try
+    User := FindUser(UserId);
+    if (User = nil) or (Trim(User.Nick) = '') then
+      Exit('nick_required');
+    if not fMicsChangeable then
+      Exit('mic_not_now');
+    if (Player < 0) or (Player > Length(fMics)) then
+      Exit('not_found');
+    if Player = 0 then
+    begin
+      for I := 0 to High(fMics) do
+        if SameText(fMics[I].Name, User.Nick) then
+          QueueMicChange(Self, I, '');
+    end
+    else
+      QueueMicChange(Self, Player - 1, Trim(User.Nick));
+    AddActivity('mic', User.Nick, IntToStr(Player));
+    Result := '';
+  finally
+    fLock.Leave;
+  end;
+end;
+
+function TSongRequests.AdminSetMic(Player: integer; const Name: UTF8String): UTF8String;
+var
+  Clean: UTF8String;
+  I: integer;
+begin
+  Clean := '';
+  for I := 1 to Length(Name) do
+    if Name[I] >= ' ' then
+      Clean := Clean + Name[I];
+  Clean := Trim(Clean);
+  if LengthUTF8(Clean) > MAX_NICK_LENGTH then
+    Clean := Trim(UTF8Copy(Clean, 1, MAX_NICK_LENGTH));
+  fLock.Enter;
+  try
+    if (Player < 1) or (Player > Length(fMics)) then
+      Exit('not_found');
+    QueueMicChange(Self, Player - 1, Clean);
+    AddActivity('admin_mic', Clean, IntToStr(Player));
+    Result := '';
   finally
     fLock.Leave;
   end;

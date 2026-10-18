@@ -17,6 +17,7 @@
     <nav class="tabs hidden" id="tabs">
       <button data-tab="queue" class="active"><span data-i18n="tab_queue">Cola</span><span class="badge hidden" id="queueBadge">0</span></button>
       <button data-tab="users"><span data-i18n="tab_users">Usuarios</span><span class="badge hidden" id="usersBadge">0</span></button>
+      <button data-tab="mics" data-i18n="tab_mics">Micros</button>
       <button data-tab="activity" data-i18n="tab_activity">Actividad</button>
       <button data-tab="settings" data-i18n="tab_settings">Ajustes</button>
     </nav>
@@ -54,6 +55,12 @@
       </div>
       <h3 class="section-title" data-i18n="blocked_ips">IPs bloqueadas</h3>
       <div id="blockedIps" class="summary"></div>
+    </section>
+
+    <section id="micsTab" class="hidden">
+      <p class="summary" id="micsNote"></p>
+      <div class="mic-admin" id="micRows"></div>
+      <datalist id="knownNicks"></datalist>
     </section>
 
     <section id="activityTab" class="hidden">

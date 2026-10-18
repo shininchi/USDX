@@ -677,6 +677,65 @@ async function spinLucky() {
   setLuckyButtons(false);
 }
 
+// ---------- microphones ----------
+
+state.mics = { mics: [], mine: 0, changeable: false };
+
+async function refreshMics() {
+  try {
+    state.mics = await api('/api/mics');
+  } catch (e) {
+    return;
+  }
+  renderMicChip();
+}
+
+function micBox(mic, big) {
+  const taken = !!mic.name;
+  return el('span', {
+    class: `mic-box${big ? ' big' : ''}${taken ? ' taken' : ''}`,
+    style: `border-color: ${mic.color}; ${taken ? `background: ${mic.color};` : ''}`,
+    text: big || taken ? String(mic.n) : '',
+  });
+}
+
+// the guest's microphone, or an empty grey box
+function renderMicChip() {
+  const chip = $('micChip');
+  const mine = state.mics.mics.find(m => m.n === state.mics.mine);
+  chip.replaceChildren(mine ? micBox(mine, false) : el('span', { class: 'mic-box' }));
+  chip.title = mine ? `${t('mic')} ${mine.n}` : t('mic');
+}
+
+async function chooseMic(n, close) {
+  try {
+    await api('/api/mic', { n });
+    toast(n ? t('mic_ok', n) : t('mic_left'), 'ok');
+    close();
+    refreshMics();
+  } catch (error) {
+    if (error.code === 'nick_required' && await askNick()) return chooseMic(n, close);
+    toast(errorText(error), 'error');
+  }
+}
+
+async function openMicPicker() {
+  await refreshMics();
+  const { mics, mine, changeable } = state.mics;
+  let close;
+  const list = el('div', { class: 'mic-list' }, mics.map(mic =>
+    el('button', {
+      class: `mic-option${mic.n === mine ? ' mine' : ''}`,
+      disabled: !changeable || mic.n === mine,
+      onclick: () => chooseMic(mic.n, close),
+    }, micBox(mic, true), el('span', { class: 'mic-name', text: mic.name || t('mic_free') }))));
+  close = openSheet(el('div', { class: 'form mic-picker' },
+    el('h2', { text: t('mic_title') }),
+    el('p', { text: mics.length ? (changeable ? t('mic_text') : t('mic_not_now')) : t('mic_none') }),
+    list,
+    mine && changeable ? el('button', { class: 'btn-ghost', text: t('mic_leave'), onclick: () => chooseMic(0, close) }) : null));
+}
+
 // ---------- queue ----------
 
 function queueNode(item) {
@@ -794,6 +853,7 @@ async function start() {
   $('tabSongs').addEventListener('click', () => setTab('songs'));
   $('tabQueue').addEventListener('click', () => setTab('queue'));
   $('nickChip').addEventListener('click', askNick);
+  $('micChip').addEventListener('click', openMicPicker);
   document.body.append(luckyButton('floating'));
   document.querySelector('.qblock.floating').id = 'luckyBtn';
   $('autoplayChip').addEventListener('click', toggleAutoplay);
@@ -810,10 +870,11 @@ async function start() {
   }
   loadSongs();
   refreshQueue();
+  refreshMics();
   if (!state.info.me.nick) askNick();
 
   // poll often while the page is visible, not at all in the background
-  setInterval(() => { if (!document.hidden) refreshQueue(); }, 4000);
+  setInterval(() => { if (!document.hidden) { refreshQueue(); refreshMics(); } }, 4000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshQueue(); });
   setInterval(updateNowProgress, 1000);
   setInterval(() => { if (!document.hidden) loadInfo().catch(() => {}); }, 30000);

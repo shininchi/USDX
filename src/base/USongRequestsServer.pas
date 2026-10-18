@@ -626,6 +626,10 @@ begin
       end
       else if (URLPath = '/api/unvote') and (Method = 'POST') then
         SendResult(AResponse, SongRequests.WithdrawVote(UserId, BodyInt('id')))
+      else if (URLPath = '/api/mics') and (Method = 'GET') then
+        SendJSON(AResponse, 200, SongRequests.MicsJSON(UserId))
+      else if (URLPath = '/api/mic') and (Method = 'POST') then
+        SendResult(AResponse, SongRequests.RequestMic(UserId, BodyInt('n')))
 
       // admin API
       else if (URLPath = '/api/admin/login') and (Method = 'POST') then
@@ -654,6 +658,10 @@ begin
           SendResult(AResponse, SongRequests.AdminIPAction(BodyStr('action'), BodyStr('ip')))
         else if (URLPath = '/api/admin/maintenance') and (Method = 'POST') then
           SendResult(AResponse, SongRequests.AdminMaintenance(BodyStr('action')))
+        else if (URLPath = '/api/admin/mics') and (Method = 'GET') then
+          SendJSON(AResponse, 200, SongRequests.MicsJSON(''))
+        else if (URLPath = '/api/admin/mic') and (Method = 'POST') then
+          SendResult(AResponse, SongRequests.AdminSetMic(BodyInt('n'), BodyStr('name')))
         else if (URLPath = '/api/admin/settings') and (Method = 'POST') then
         begin
           if Body = nil then
