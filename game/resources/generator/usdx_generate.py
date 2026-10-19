@@ -326,6 +326,62 @@ def rename_song_files(txt, artist, title):
     return txt
 
 
+def use_file_details(txt, original, ffmpeg_dir):
+    """A new song made from a file keeps what that file had: its audio as it
+    is (UltraSinger compresses it again, which sounds worse), its embedded
+    picture as cover and its year and genre (UltraSinger takes those from
+    MusicBrainz, often from another record)."""
+    folder = os.path.dirname(txt)
+    base = os.path.splitext(os.path.basename(txt))[0]
+    header, body = split_song(read_text(txt))
+    old_files = {tag_of(l): l.split(":", 1)[1].strip() for l in header
+                 if tag_of(l) in ("MP3", "AUDIO", "COVER")}
+
+    # the original audio
+    ext = os.path.splitext(original)[1].lower()
+    audio = base + ext
+    shutil.copy2(original, os.path.join(folder, audio))
+    for tag in ("MP3", "AUDIO"):
+        old = old_files.get(tag)
+        if old and old != audio and os.path.isfile(os.path.join(folder, old)):
+            os.remove(os.path.join(folder, old))
+    header = [l for l in header if tag_of(l) not in ("MP3", "AUDIO")]
+    header.append("#MP3:" + audio)
+
+    # cover, year and genre from the file
+    ffprobe = os.path.join(ffmpeg_dir, "ffprobe") if ffmpeg_dir else "ffprobe"
+    ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg") if ffmpeg_dir else "ffmpeg"
+    try:
+        info = json.loads(subprocess.run([ffprobe, "-v", "error", "-show_entries",
+            "format_tags:stream=codec_type:stream_disposition=attached_pic", "-of", "json", original],
+            capture_output=True, text=True, timeout=20).stdout)
+    except Exception:
+        info = {}
+    tags = {k.lower(): v.strip() for k, v in info.get("format", {}).get("tags", {}).items()}
+    has_picture = any(st.get("disposition", {}).get("attached_pic") for st in info.get("streams", []))
+    if has_picture:
+        cover = base + " [CO].jpg"
+        result = subprocess.run([ffmpeg, "-nostdin", "-loglevel", "error", "-y", "-i", original,
+                                 "-an", "-map", "0:v:0", "-frames:v", "1", os.path.join(folder, cover)],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            old = old_files.get("COVER")
+            if old and old != cover and os.path.isfile(os.path.join(folder, old)):
+                os.remove(os.path.join(folder, old))
+            header = [l for l in header if tag_of(l) != "COVER"]
+            header.append("#COVER:" + cover)
+    year = re.match(r"\d{4}", tags.get("date", "") or tags.get("year", ""))
+    if year:
+        header = [l for l in header if tag_of(l) != "YEAR"]
+        header.append("#YEAR:" + year.group(0))
+    if tags.get("genre"):
+        header = [l for l in header if tag_of(l) != "GENRE"]
+        header.append("#GENRE:" + tags["genre"])
+
+    with open(txt, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(header + body) + "\n")
+
+
 def find_txt(out_dir):
     for root, _dirs, files in os.walk(out_dir):
         if "cache" in os.path.relpath(root, out_dir).split(os.sep):
@@ -448,6 +504,8 @@ def main():
                 set_artist_title(txt, *names)
                 txt = rename_song_files(txt, *names)
                 folder_name = os.path.splitext(os.path.basename(txt))[0]
+            if os.path.isfile(args.input):
+                use_file_details(txt, args.input, args.ffmpeg)
             target = unique_dir(os.path.join(args.out, folder_name))
             shutil.move(song_dir, target)
             result = os.path.join(target, os.path.basename(txt))
