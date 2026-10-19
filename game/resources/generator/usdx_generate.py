@@ -15,6 +15,7 @@ Modes:
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -151,6 +152,30 @@ def find_lyrics(args):
     return lyrics_in(folder)
 
 
+AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav")
+
+
+def audio_only(path, work, ffmpeg_dir):
+    """A copy of an audio file without the cover picture inside it.
+
+    UltraSinger takes an mp3 with an embedded cover for a video and then
+    fails writing the audio over the file it reads. The audio is copied as
+    it is, so the timing does not change."""
+    if not os.path.isfile(path) or os.path.splitext(path)[1].lower() not in AUDIO_EXTS:
+        return path
+    ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg") if ffmpeg_dir else "ffmpeg"
+    folder = os.path.join(work, "input")
+    os.makedirs(folder, exist_ok=True)
+    target = os.path.join(folder, os.path.basename(path))
+    result = subprocess.run([ffmpeg, "-nostdin", "-loglevel", "error", "-y", "-i", path,
+                             "-map", "0:a:0", "-c", "copy", "-map_metadata", "0", target],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0 or not os.path.isfile(target):
+        print("Could not copy the audio: " + result.stdout.strip(), flush=True)
+        return path
+    return target
+
+
 def run_ultrasinger(args, out_dir, language):
     script = os.path.join(args.ultrasinger, "src", "UltraSinger.py")
     lyrics = find_lyrics(args)
@@ -159,7 +184,7 @@ def run_ultrasinger(args, out_dir, language):
         print("Using the lyrics in " + lyrics, flush=True)
         hook = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "lyrics_hook.py"), lyrics]
     cmd = [sys.executable, "-u", "-B"] + hook + [script,
-           "-i", args.input, "-o", out_dir,
+           "-i", audio_only(args.input, out_dir, args.ffmpeg), "-o", out_dir,
            "--format_version", "1.0.0",
            "--disable_karaoke",
            "--keep_cache",
@@ -243,9 +268,29 @@ def clean_up_song(txt, vocals, lyrics=None):
         f.write("\n".join(header + body) + "\n")
 
 
-def name_from_file(path):
-    """(artist, title) of a file named "Artist - Title.ext", or None."""
+def tags_of(path, ffmpeg_dir):
+    """(artist, title) from the file's tags (ID3...), or None."""
+    ffprobe = os.path.join(ffmpeg_dir, "ffprobe") if ffmpeg_dir else "ffprobe"
+    try:
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format_tags=artist,title",
+                              "-of", "json", path], capture_output=True, text=True, timeout=20).stdout
+        tags = {k.lower(): v.strip() for k, v in json.loads(out).get("format", {}).get("tags", {}).items()}
+    except Exception:
+        return None
+    if tags.get("artist") and tags.get("title"):
+        return tags["artist"], tags["title"]
+    return None
+
+
+def name_from_file(path, ffmpeg_dir=None):
+    """(artist, title) of an audio or video file: from its tags, or from a
+    name like "02 Artist - Title.ext" (the track number is dropped); None
+    if neither says."""
+    tags = tags_of(path, ffmpeg_dir)
+    if tags:
+        return tags
     base = os.path.splitext(os.path.basename(path))[0]
+    base = re.sub(r"^\d{1,3}[\s.\-_]+", "", base).strip()
     if " - " not in base:
         return None
     artist, title = (p.strip() for p in base.split(" - ", 1))
@@ -259,6 +304,26 @@ def set_artist_title(txt, artist, title):
     header[1:1] = ["#ARTIST:" + artist, "#TITLE:" + title]
     with open(txt, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(header + body) + "\n")
+
+
+def rename_song_files(txt, artist, title):
+    """Names the files of a new song "Artist - Title.*" (UltraSinger names
+    them after its MusicBrainz guess) and points the txt to them."""
+    folder = os.path.dirname(txt)
+    old = os.path.splitext(os.path.basename(txt))[0]
+    new = re.sub(r'[\\/:*?"<>|]', "", "%s - %s" % (artist, title)).strip()
+    if not new or new == old:
+        return txt
+    for name in os.listdir(folder):
+        if name.startswith(old):
+            os.replace(os.path.join(folder, name), os.path.join(folder, new + name[len(old):]))
+    txt = os.path.join(folder, new + ".txt")
+    header, body = split_song(read_text(txt))
+    header = [l.replace(old, new) if tag_of(l) in ("MP3", "AUDIO", "VIDEO", "COVER", "BACKGROUND",
+                                                    "VOCALS", "INSTRUMENTAL") else l for l in header]
+    with open(txt, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(header + body) + "\n")
+    return txt
 
 
 def find_txt(out_dir):
@@ -354,9 +419,10 @@ def main():
     os.makedirs(work_parent, exist_ok=True)
     work = tempfile.mkdtemp(prefix=".usdx-generate-", dir=work_parent)
     try:
-        language = language_code(args.language)
-        if not language and args.replace:
-            language = song_language(args.replace)
+        # a song being filled in says its language; otherwise the one chosen
+        language = song_language(args.replace) if args.replace else None
+        if not language:
+            language = language_code(args.language)
         try:
             run_ultrasinger(args, work, language)
         except RuntimeError as e:
@@ -377,10 +443,11 @@ def main():
             song_dir = os.path.dirname(txt)
             shutil.rmtree(os.path.join(song_dir, "cache"), ignore_errors=True)
             folder_name = os.path.basename(song_dir)
-            names = name_from_file(args.input) if os.path.isfile(args.input) else None
+            names = name_from_file(args.input, args.ffmpeg) if os.path.isfile(args.input) else None
             if names:
                 set_artist_title(txt, *names)
-                folder_name = "%s - %s" % names
+                txt = rename_song_files(txt, *names)
+                folder_name = os.path.splitext(os.path.basename(txt))[0]
             target = unique_dir(os.path.join(args.out, folder_name))
             shutil.move(song_dir, target)
             result = os.path.join(target, os.path.basename(txt))

@@ -47,6 +47,7 @@ uses
 type
   TGenerateOptionID = (
     iSongSlide,
+    iLanguageSlide,
     iSourceButton,
     iStartButton,
     iBackButton
@@ -55,6 +56,7 @@ type
   TScreenEditGenerate = class(TOptionsMenu)
     private
       SelSong:      integer;
+      SelLanguage:  integer;
       ButtonSource: integer;
       ButtonStart:  integer;
 
@@ -95,6 +97,7 @@ uses
   UUnicodeUtils;
 
 const
+  LANGUAGE_CODES: array[0..2] of string = ('', 'es', 'en');
   MAX_SHOWN_CHARS = 38;  // longer sources are cut so the button text fits
   MIN_LYRIC_NOTES = 3;   // songs with fewer notes with text count as without lyrics
 
@@ -119,6 +122,7 @@ end;
 
 // lyrics file the generator uses for this folder (see usdx_generate.py)
 var
+  ILanguages:      array[0..2] of UTF8String;
   LyricsFolder:    UTF8String;
   LyricsFolderHas: boolean;
   LyricsChecked:   TDateTime;
@@ -210,6 +214,12 @@ procedure TScreenEditGenerate.LoadWidgets;
 begin
   // when editing this, also update the TGenerateOptionID enum declaration
   AddSelectSlide('SING_EDIT_GENERATE_SONG', SelSong, SongNames);
+  // Whisper guesses the language from the first seconds, and often wrong
+  ILanguages[0] := Language.Translate('SING_EDIT_GENERATE_LANG_AUTO');
+  ILanguages[1] := Language.Translate('SING_EDIT_GENERATE_LANG_ES');
+  ILanguages[2] := Language.Translate('SING_EDIT_GENERATE_LANG_EN');
+  SelLanguage := 1;
+  AddSelectSlide('SING_EDIT_GENERATE_LANGUAGE', SelLanguage, ILanguages);
   ButtonSource := AddButton('');
   ButtonStart := AddButton('');
 end;
@@ -382,7 +392,7 @@ begin
     end;
   end;
 
-  if SongGenerator.Start(Input, Replace) then
+  if SongGenerator.Start(Input, Replace, LANGUAGE_CODES[SelLanguage]) then
     AudioPlayback.PlaySound(SoundLib.Start);
 end;
 

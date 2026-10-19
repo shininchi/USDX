@@ -83,7 +83,8 @@ type
       function ScriptPath: UTF8String;
       function Available: boolean;
       // Input: audio/video file or URL; ReplaceTxt: song to fill in, or ''
-      function Start(const Input, ReplaceTxt: UTF8String): boolean;
+      // Language: code of the lyrics ('es', 'en'), '' = the config default
+      function Start(const Input, ReplaceTxt: UTF8String; const Language: UTF8String = ''): boolean;
       procedure Cancel;
       // main thread, every frame: adds finished songs to the song list
       procedure Tick;
@@ -409,7 +410,7 @@ begin
     Log.LogWarn('Generation failed: ' + Text, 'SongGenerator');
 end;
 
-function TSongGenerator.Start(const Input, ReplaceTxt: UTF8String): boolean;
+function TSongGenerator.Start(const Input, ReplaceTxt: UTF8String; const Language: UTF8String): boolean;
 var
   Args:   TStringList;
   FFmpeg: UTF8String;
@@ -452,7 +453,12 @@ begin
   end;
   Args.Add('--whisper');
   Args.Add(fWhisper);
-  if fLanguage <> '' then
+  if Language <> '' then
+  begin
+    Args.Add('--language');
+    Args.Add(Language);
+  end
+  else if fLanguage <> '' then
   begin
     Args.Add('--language');
     Args.Add(fLanguage);
