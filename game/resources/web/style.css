@@ -771,3 +771,29 @@ body.lucky-open .qblock.floating { display: none; }
 .streak > div:nth-child(2) { flex: 1; }
 .streak .summary { margin: 0; }
 .streak.none .crown-icon { filter: brightness(0); opacity: .25; }
+
+/* guided tour: the page dimmed but the part explained */
+.tour-layer { position: fixed; inset: 0; z-index: 90; }
+.tour-spot {
+  position: fixed;
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .72);
+  outline: 2px solid var(--accent);
+  transition: top .25s, left .25s, width .25s, height .25s;
+  pointer-events: none;
+}
+.tour-spot.none { top: 50%; left: 50%; width: 0; height: 0; outline: none; }
+.tour-card {
+  position: fixed;
+  width: min(340px, calc(100vw - 24px));
+  background: var(--bg-2);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+  transition: top .25s, left .25s;
+}
+.tour-card h2 { margin: 2px 0 6px; font-size: 18px; }
+.tour-card p { margin: 0 0 14px; color: var(--muted); line-height: 1.45; }
+.tour-count { font-size: 12px; color: var(--accent); font-weight: 700; }
+.tour-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+.tour-buttons .btn-ghost:first-child { margin-right: auto; }

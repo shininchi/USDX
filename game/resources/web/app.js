@@ -924,6 +924,7 @@ async function start() {
   $('tabSongs').addEventListener('click', () => setTab('songs'));
   $('tabQueue').addEventListener('click', () => setTab('queue'));
   $('tabRecords').addEventListener('click', () => setTab('records'));
+  $('tourLink').addEventListener('click', e => { e.preventDefault(); startTour(); });
   $('nickChip').addEventListener('click', askNick);
   $('micChip').addEventListener('click', openMicPicker);
   document.body.append(luckyButton('floating'));
@@ -943,7 +944,8 @@ async function start() {
   loadSongs();
   refreshQueue();
   refreshMics();
-  if (!state.info.me.nick) askNick();
+  // the nickname first, then the guide on the first visit
+  (state.info.me.nick ? Promise.resolve(true) : askNick()).then(maybeStartTour);
 
   // poll often while the page is visible, not at all in the background
   setInterval(() => {
