@@ -2111,7 +2111,14 @@ begin
       Exit;
     end
     else if User.Nick <> Clean then
+    begin
       AddActivity('nick', Clean, User.Nick);
+      // the microphone the guest had keeps going with them
+      if Trim(User.Nick) <> '' then
+        for I := 0 to High(fMics) do
+          if SameText(fMics[I].Name, Trim(User.Nick)) then
+            QueueMicChange(Self, I, Clean);
+    end;
     User.Nick := Clean;
     User.LastIP := IP;
     User.LastSeen := NowUTC;

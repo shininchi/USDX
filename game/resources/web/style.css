@@ -797,3 +797,6 @@ body.lucky-open .qblock.floating { display: none; }
 .tour-count { font-size: 12px; color: var(--accent); font-weight: 700; }
 .tour-buttons { display: flex; gap: 8px; justify-content: flex-end; }
 .tour-buttons .btn-ghost:first-child { margin-right: auto; }
+
+/* changing the nickname leaves the achievements of the old one behind */
+.form .nick-warning { margin: 0; font-size: 13px; line-height: 1.4; background: var(--bg-3); color: var(--warn); border-radius: 10px; padding: 10px 12px; }

@@ -118,10 +118,17 @@ function askNick() {
         toast(errorText(error), 'error');
       }
     };
+    // the scores and achievements go with the nickname: warn before changing it
+    const current = ((state.info && state.info.me.nick) || '').trim();
+    const warning = el('p', { class: 'notice nick-warning hidden', text: t('nick_change_warning', current) });
+    input.addEventListener('input', () => {
+      warning.classList.toggle('hidden', !current || input.value.trim().toLowerCase() === current.toLowerCase());
+    });
     const form = el('form', { class: 'form', onsubmit: submit },
       el('h2', { text: t('nick_title') }),
       el('p', { text: t('nick_text') }),
       input,
+      warning,
       el('button', { class: 'btn-primary', type: 'submit', text: t('save') }));
     const close = openSheet(form, () => { if (!done) resolve(false); });
     setTimeout(() => input.focus(), 50);
