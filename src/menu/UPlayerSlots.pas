@@ -637,6 +637,7 @@ end;
 
 procedure PlayerSlotsDraw;
 var
+  DX, DY:   integer;
   I, N:     integer;
   X, Y, CX: single;
   Col:      TRGB;
@@ -692,12 +693,22 @@ begin
       if WinStreak[I] >= 2 then
       begin
         SetFontStyle(ftBold);
-        SetFontSize(13);
+        SetFontSize(16);
         Text := 'x' + IntToStr(WinStreak[I]);
         Renderer.DepthTest := false;
-        Renderer.DrawQuad(CX + 9, Y - 24, 0, TextWidth(Text) + 6, 15, 0.05, 0.05, 0.1, 0.85);
-        SetFontColor(1.0, 0.85, 0.3, 1);
-        SetFontPos(CX + 12, Y - 25);
+        // right of the crown, its bottom on the crown's base, gold with a
+        // dark outline like the crown
+        // (close to the crown, leaving room for the next player's one)
+        SetFontColor(0.2, 0.12, 0.02, 1);
+        for DX := -2 to 2 do
+          for DY := -2 to 2 do
+            if ((DX <> 0) or (DY <> 0)) and (Abs(DX) + Abs(DY) <= 3) then
+            begin
+              SetFontPos(CX + 13 + DX * 0.9, Y - 22.5 + DY * 0.9);
+              PrintText(Text);
+            end;
+        SetFontColor(1.0, 0.8, 0.22, 1);
+        SetFontPos(CX + 13, Y - 22.5);
         PrintText(Text);
       end;
     end;
