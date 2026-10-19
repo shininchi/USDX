@@ -811,6 +811,70 @@ async function refreshRecords() {
     el('div', { class: 'records-grid' }, tiles));
 }
 
+// ---------- sharing the page (tap the logo) ----------
+
+// a little show: the logo spins and some notes fly out of it
+function logoParty() {
+  const logo = $('brandLogo');
+  logo.classList.remove('party');
+  void logo.offsetWidth; // restart the animation
+  logo.classList.add('party');
+  const rect = logo.getBoundingClientRect();
+  ['♪', '♫', '♬', '♩', '♪', '♫'].forEach((note, i) => {
+    const n = el('span', { class: 'note-fly', text: note });
+    n.style.left = `${rect.left + rect.width / 2}px`;
+    n.style.top = `${rect.top + rect.height / 2}px`;
+    n.style.setProperty('--dx', `${(Math.random() * 2 - 1) * 70 + 40}px`);
+    n.style.setProperty('--dy', `${-60 - Math.random() * 80}px`);
+    n.style.setProperty('--rot', `${(Math.random() * 2 - 1) * 60}deg`);
+    n.style.animationDelay = `${i * 60}ms`;
+    document.body.append(n);
+    setTimeout(() => n.remove(), 1400);
+  });
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    // plain http: no clipboard API, copy through a hidden field
+    const area = el('textarea', { readonly: true, style: 'position:fixed;opacity:0' });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+    area.remove();
+    return ok;
+  }
+}
+
+async function openShare() {
+  logoParty();
+  let data;
+  try {
+    data = await api('/api/qr');
+  } catch (error) {
+    toast(errorText(error), 'error');
+    return;
+  }
+  await new Promise(resolve => setTimeout(resolve, 450));
+  const qr = el('div', { class: 'share-qr' });
+  qr.innerHTML = data.svg; // made by the game, not user input
+  const buttons = el('div', { class: 'request-row' },
+    navigator.share ? el('button', { class: 'btn-primary', text: t('share_button'),
+      onclick: () => navigator.share({ title: t('page_title'), url: data.url }).catch(() => {}) }) : null,
+    el('button', { class: navigator.share ? 'btn-ghost' : 'btn-primary', text: t('copy_link'),
+      onclick: async () => toast(await copyText(data.url) ? t('link_copied') : data.url, 'ok') }));
+  openSheet(el('div', { class: 'detail share' },
+    el('h2', { text: t('share_title') }),
+    el('p', { class: 'summary', text: t('share_text') }),
+    qr,
+    el('div', { class: 'share-url', text: data.url }),
+    buttons));
+}
+
 // ---------- queue ----------
 
 function queueNode(item) {
@@ -932,6 +996,7 @@ async function start() {
   $('tabQueue').addEventListener('click', () => setTab('queue'));
   $('tabRecords').addEventListener('click', () => setTab('records'));
   $('tourLink').addEventListener('click', e => { e.preventDefault(); startTour(); });
+  $('brand').addEventListener('click', openShare);
   $('nickChip').addEventListener('click', askNick);
   $('micChip').addEventListener('click', openMicPicker);
   document.body.append(luckyButton('floating'));

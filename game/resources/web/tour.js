@@ -24,6 +24,8 @@ Object.assign(TEXTS.es, {
   tour_records: 'Las calificaciones que consigues al cantar, cuántas veces cada una, y tu mejor racha de canciones ganadas.',
   tour_queue_t: 'En cola',
   tour_queue: 'Lo que se va a cantar. Si alguien ya ha pedido una canción que te gusta, súmale tu voto para que suba; puedes retirarlo cuando quieras.',
+  tour_share_t: 'Invita a más gente',
+  tour_share: 'Toca el logo y aparecerá el código QR del Cancionero para que otros lo abran en su móvil, o para compartir el enlace.',
   tour_end_t: 'Eso es todo',
   tour_end: 'Si quieres volver a ver esta guía, está al final de «En cola».',
 });
@@ -49,6 +51,8 @@ Object.assign(TEXTS.en, {
   tour_records: 'The ratings you get singing, how many times each, and your best streak of songs won.',
   tour_queue_t: 'In queue',
   tour_queue: 'What is going to be sung. If someone already requested a song you like, add your vote so it moves up; you can take it back any time.',
+  tour_share_t: 'Invite more people',
+  tour_share: 'Tap the logo and the QR code of the Songbook shows up for others to open it on their phone, or to share the link.',
   tour_end_t: "That's all",
   tour_end: 'To see this guide again, it is at the end of "In queue".',
 });
@@ -64,6 +68,7 @@ const TOUR_STEPS = [
   { key: 'song', target: () => document.querySelector('#results .song') },
   { key: 'records', target: () => $('tabRecords') },
   { key: 'queue', target: () => $('tabQueue') },
+  { key: 'share', target: () => $('brandLogo') },
   { key: 'end' },
 ];
 

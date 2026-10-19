@@ -800,3 +800,35 @@ body.lucky-open .qblock.floating { display: none; }
 
 /* changing the nickname leaves the achievements of the old one behind */
 .form .nick-warning { margin: 0; font-size: 13px; line-height: 1.4; background: var(--bg-3); color: var(--warn); border-radius: 10px; padding: 10px 12px; }
+
+/* the logo shares the page (a small easter egg) */
+#brand { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.brand-logo.party { animation: logo-party .7s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes logo-party {
+  0% { transform: none; }
+  40% { transform: rotate(-200deg) scale(1.35); }
+  100% { transform: rotate(-360deg) scale(1); }
+}
+.note-fly {
+  position: fixed;
+  z-index: 95;
+  pointer-events: none;
+  font-size: 22px;
+  color: #fcc626;
+  text-shadow: 0 1px 2px rgba(0,0,0,.6);
+  transform: translate(-50%, -50%);
+  animation: note-fly 1.1s ease-out forwards;
+  opacity: 0;
+}
+@keyframes note-fly {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.4); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)) scale(1.2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-logo.party, .note-fly { animation: none; }
+}
+.share { text-align: center; }
+.share-qr { width: min(260px, 70vw); margin: 10px auto; border-radius: 12px; overflow: hidden; }
+.share-qr svg { display: block; width: 100%; height: auto; }
+.share-url { font-size: 13px; color: var(--muted); word-break: break-all; margin-bottom: 4px; }
