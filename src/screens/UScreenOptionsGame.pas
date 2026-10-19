@@ -55,6 +55,7 @@ type
       MicDelayOptInt:integer;
       AVDelaySelectNum:  integer;
       MicDelaySelectNum: integer;
+      MicTapsOption:     integer;
 
       procedure Leave;
       procedure ReloadCurrentScreen;
@@ -79,11 +80,15 @@ implementation
 uses
   UConfig,
   UGraphic,
+  UMicTaps,
   UHelp,
   ULanguage,
   ULog,
   UUnicodeUtils,
   SysUtils;
+
+var
+  IMicTaps: array[0..1] of UTF8String;
 
 type
   TGetTextFunc = function(var Param: integer; Offset: integer; Modify: boolean; OptText: PUtf8String): boolean;
@@ -97,6 +102,7 @@ type
     iDebugSlide,
     iAVDelaySlide,
     iMicDelaySlide,
+    iMicTapsSlide,
     iBackButton
   );
 
@@ -262,6 +268,8 @@ end;
 procedure TScreenOptionsGame.Leave;
 begin
   Ini.Save;
+  if MicTapsEnabled <> (MicTapsOption = 1) then
+    MicTapsSetEnabled(MicTapsOption = 1);
   ReloadAllScreens;
   ReloadSongMenu;
 
@@ -316,6 +324,11 @@ begin
   AddSelectSlide('SING_OPTIONS_GAME_SHOWSCORES', Ini.ShowScores, IShowScoresTranslated);
   AddSelectSlide('SING_OPTIONS_GAME_DEBUG', Ini.Debug, IDebugTranslated);
   UpdateCalculatedSelectSlides(true);
+  // taps on the microphones as commands (UMicTaps)
+  IMicTaps[0] := Language.Translate('OPTION_VALUE_OFF');
+  IMicTaps[1] := Language.Translate('OPTION_VALUE_ON');
+  MicTapsOption := Ord(MicTapsEnabled);
+  AddSelectSlide('SING_OPTIONS_GAME_MICTAPS', MicTapsOption, IMicTaps);
 end;
 
 end.

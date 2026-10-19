@@ -75,6 +75,7 @@ uses
   {$ENDIF}
   fpjson,
   jsonparser,
+  fpqrcodegen,
   UPathUtils,
   ULog,
   USongRequests;
@@ -258,6 +259,43 @@ begin
   AResponse.ContentType := 'application/json; charset=utf-8';
   AResponse.SetCustomHeader('Cache-Control', 'no-store');
   AResponse.Content := JSON;
+end;
+
+// the QR code of the page, as the TV shows it, for guests to share it:
+// {"url": ..., "svg": ...}
+function QRJSON: UTF8String;
+const
+  QUIET = 4; // modules of white margin
+var
+  Generator: TQRCodeGenerator;
+  URL, Path: UTF8String;
+  X, Y, Size: integer;
+  Root: TJSONObject;
+begin
+  URL := SongRequestsURL;
+  Path := '';
+  Size := 0;
+  Generator := TQRCodeGenerator.Create;
+  try
+    Generator.Generate(URL);
+    Size := Generator.Size;
+    for Y := 0 to Size - 1 do
+      for X := 0 to Size - 1 do
+        if Generator.Bits[X, Y] then
+          Path := Path + Format('M%d %dh1v1h-1z', [X + QUIET, Y + QUIET]);
+  finally
+    Generator.Free;
+  end;
+  Root := TJSONObject.Create;
+  try
+    Root.Add('url', URL);
+    Root.Add('svg', Format('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %0:d %0:d" ' +
+      'shape-rendering="crispEdges"><rect width="%0:d" height="%0:d" fill="#fff"/>' +
+      '<path d="%1:s" fill="#000"/></svg>', [Size + 2 * QUIET, Path]));
+    Result := Root.AsJSON;
+  finally
+    Root.Free;
+  end;
 end;
 
 procedure SendError(AResponse: TFPHTTPConnectionResponse; Code: integer; const Error: UTF8String);
@@ -626,6 +664,14 @@ begin
       end
       else if (URLPath = '/api/unvote') and (Method = 'POST') then
         SendResult(AResponse, SongRequests.WithdrawVote(UserId, BodyInt('id')))
+      else if (URLPath = '/api/qr') and (Method = 'GET') then
+        SendJSON(AResponse, 200, QRJSON)
+      else if (URLPath = '/api/records') and (Method = 'GET') then
+        SendJSON(AResponse, 200, SongRequests.RecordsJSON(UserId))
+      else if (URLPath = '/api/mics') and (Method = 'GET') then
+        SendJSON(AResponse, 200, SongRequests.MicsJSON(UserId))
+      else if (URLPath = '/api/mic') and (Method = 'POST') then
+        SendResult(AResponse, SongRequests.RequestMic(UserId, BodyInt('n')))
 
       // admin API
       else if (URLPath = '/api/admin/login') and (Method = 'POST') then
@@ -654,6 +700,10 @@ begin
           SendResult(AResponse, SongRequests.AdminIPAction(BodyStr('action'), BodyStr('ip')))
         else if (URLPath = '/api/admin/maintenance') and (Method = 'POST') then
           SendResult(AResponse, SongRequests.AdminMaintenance(BodyStr('action')))
+        else if (URLPath = '/api/admin/mics') and (Method = 'GET') then
+          SendJSON(AResponse, 200, SongRequests.MicsJSON(''))
+        else if (URLPath = '/api/admin/mic') and (Method = 'POST') then
+          SendResult(AResponse, SongRequests.AdminSetMic(BodyInt('n'), BodyStr('name')))
         else if (URLPath = '/api/admin/settings') and (Method = 'POST') then
         begin
           if Body = nil then

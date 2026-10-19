@@ -118,10 +118,17 @@ function askNick() {
         toast(errorText(error), 'error');
       }
     };
+    // the scores and achievements go with the nickname: warn before changing it
+    const current = ((state.info && state.info.me.nick) || '').trim();
+    const warning = el('p', { class: 'notice nick-warning hidden', text: t('nick_change_warning', current) });
+    input.addEventListener('input', () => {
+      warning.classList.toggle('hidden', !current || input.value.trim().toLowerCase() === current.toLowerCase());
+    });
     const form = el('form', { class: 'form', onsubmit: submit },
       el('h2', { text: t('nick_title') }),
       el('p', { text: t('nick_text') }),
       input,
+      warning,
       el('button', { class: 'btn-primary', type: 'submit', text: t('save') }));
     const close = openSheet(form, () => { if (!done) resolve(false); });
     setTimeout(() => input.focus(), 50);
@@ -471,6 +478,13 @@ async function openSong(id, primed = null) {
     toast(errorText(error), 'error');
     return;
   }
+  let close;
+  const detail = songDetail(song, primed, () => close());
+  close = openSheet(detail.node, detail.onClose);
+}
+
+// The details of a song: { node, onClose }. close() closes what shows it.
+function songDetail(song, primed, close) {
 
   const stats = el('div', { class: 'stats' },
     el('div', { class: 'stat' }, el('strong', { text: song.played }), el('span', { text: t('played') })),
@@ -497,7 +511,6 @@ async function openSong(id, primed = null) {
   const iconRow = icons.length ? el('div', { class: 'song-icons' }, icons) : null;
 
   const row = el('div', { class: 'request-row' });
-  let close;
   const act = async (path, okText) => {
     try {
       await api(path, { id: song.id });
@@ -530,7 +543,7 @@ async function openSong(id, primed = null) {
   let open = true;
   if (song.clip) loadClip(song, cover, () => open);
 
-  close = openSheet(el('div', { class: 'detail' },
+  const node = el('div', { class: 'detail' },
     cover,
     el('h2', { text: song.title }),
     el('div', { class: 'artist', text: song.artist }),
@@ -540,11 +553,326 @@ async function openSong(id, primed = null) {
     stats,
     el('h3', { text: t('top_scores') }),
     scores,
-    row), () => {
-      open = false;
-      stopPreview();
-      cover.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); });
+    row);
+  const onClose = () => {
+    open = false;
+    stopPreview();
+    cover.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); });
+  };
+  return { node, onClose };
+}
+
+// ---------- random song ("?" block) ----------
+
+const SPIN_MS = 3200;      // how long the reel turns
+const REEL_COVERS = 24;    // covers passing by before the chosen one
+
+const lucky = { body: null, close: null, detail: null, spinning: false };
+
+function randomItems(items, count, except) {
+  const pool = items.filter(s => s !== except);
+  const result = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    result.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return result;
+}
+
+// starts loading the covers that pass by, so the reel is not blank
+function preloadCovers(songs, ms) {
+  const loads = songs.filter(s => s.cover && s.id >= 0).map(s => new Promise(resolve => {
+    const img = new Image();
+    img.onload = img.onerror = resolve;
+    img.src = `/api/cover/${s.id}`;
+  }));
+  return Promise.race([Promise.all(loads), new Promise(resolve => setTimeout(resolve, ms))]);
+}
+
+function setLuckyButtons(spinning) {
+  lucky.spinning = spinning;
+  document.querySelectorAll('.qblock').forEach(b => {
+    b.disabled = spinning;
+    b.classList.toggle('used', spinning);
+  });
+}
+
+function luckyButton(extraClass) {
+  return el('button', {
+    class: `qblock ${extraClass}`, 'aria-label': t('lucky'), title: t('lucky'),
+    onclick: e => { bump(e.currentTarget); spinLucky(); },
+  }, el('span', { text: '?' }));
+}
+
+function bump(button) {
+  button.classList.remove('bump');
+  void button.offsetWidth; // restart the animation
+  button.classList.add('bump');
+}
+
+async function spinLucky() {
+  if (lucky.spinning) return;
+  // the current list, with its search and filters
+  const items = state.items;
+  if (!items.length) {
+    toast(t('no_results'), 'error');
+    return;
+  }
+  setLuckyButtons(true);
+
+  const chosen = items[Math.floor(Math.random() * items.length)];
+  const withCovers = items.filter(s => s.cover);
+  const passing = randomItems(withCovers.length >= 8 ? withCovers : items, REEL_COVERS, chosen);
+  const detailPromise = api(`/api/songs/${chosen.id}`).catch(error => error);
+
+  if (!lucky.body) {
+    lucky.body = el('div', { class: 'lucky' });
+    const sheet = el('div', {}, luckyButton('in-sheet'), lucky.body);
+    lucky.close = openSheet(sheet, () => {
+      if (lucky.detail) lucky.detail.onClose();
+      lucky.body = lucky.close = lucky.detail = null;
+      document.body.classList.remove('lucky-open');
     });
+    document.body.classList.add('lucky-open');
+    setLuckyButtons(true);
+  }
+  if (lucky.detail) {
+    lucky.detail.onClose();
+    lucky.detail = null;
+  }
+
+  const strip = el('div', { class: 'reel-strip' },
+    // the chosen song on top: the covers fall from above, like a slot machine
+    [chosen, ...passing].map(song => {
+      const cover = coverNode(song);
+      const img = cover.querySelector('img');
+      if (img) img.loading = 'eager';
+      return cover;
+    }));
+  const reel = el('div', { class: 'reel' }, strip);
+  const caption = el('div', { class: 'reel-caption', text: t('lucky_spinning') });
+  lucky.body.replaceChildren(reel, caption);
+
+  await preloadCovers(passing.slice(-10), 800); // the first ones to show
+  if (!lucky.body) return setLuckyButtons(false);
+
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const duration = reduced ? 600 : SPIN_MS;
+  const height = reel.clientHeight;
+  strip.style.transform = `translateY(-${passing.length * height}px)`;
+  void strip.offsetHeight; // start from the bottom of the strip
+  strip.style.transition = `transform ${duration}ms cubic-bezier(.12, .75, .22, 1)`;
+  strip.classList.add('spinning');
+  requestAnimationFrame(() => {
+    strip.style.transform = 'translateY(0)';
+  });
+  setTimeout(() => strip.classList.remove('spinning'), duration * 0.6);
+  await new Promise(resolve => setTimeout(resolve, duration + 150));
+  if (!lucky.body) return setLuckyButtons(false);
+
+  reel.classList.add('landed');
+  const song = await detailPromise;
+  if (!lucky.body) return setLuckyButtons(false);
+  if (song instanceof Error) {
+    caption.textContent = errorText(song);
+  } else {
+    lucky.detail = songDetail(song, null, () => lucky.close && lucky.close());
+    lucky.detail.node.classList.add('appear');
+    await new Promise(resolve => setTimeout(resolve, 350));
+    if (!lucky.body) return setLuckyButtons(false);
+    lucky.body.replaceChildren(lucky.detail.node);
+  }
+  setLuckyButtons(false);
+}
+
+// ---------- microphones ----------
+
+state.mics = { mics: [], mine: 0, changeable: false };
+
+async function refreshMics() {
+  try {
+    state.mics = await api('/api/mics');
+  } catch (e) {
+    return;
+  }
+  renderMicChip();
+}
+
+function micBox(mic, big) {
+  const taken = !!mic.name;
+  return el('span', {
+    class: `mic-box${big ? ' big' : ''}${taken ? ' taken' : ''}`,
+    style: `border-color: ${mic.color}; ${taken ? `background: ${mic.color};` : ''}`,
+    text: big || taken ? String(mic.n) : '',
+  });
+}
+
+// the guest's microphone, or an empty grey box
+function renderMicChip() {
+  renderCrownBadge();
+  const chip = $('micChip');
+  const mine = state.mics.mics.find(m => m.n === state.mics.mine);
+  chip.replaceChildren(mine ? micBox(mine, false) : el('span', { class: 'mic-box' }));
+  chip.title = mine ? `${t('mic')} ${mine.n}` : t('mic');
+}
+
+async function chooseMic(n, close) {
+  try {
+    await api('/api/mic', { n });
+    toast(n ? t('mic_ok', n) : t('mic_left'), 'ok');
+    close();
+    refreshMics();
+  } catch (error) {
+    if (error.code === 'nick_required' && await askNick()) return chooseMic(n, close);
+    toast(errorText(error), 'error');
+  }
+}
+
+async function openMicPicker() {
+  await refreshMics();
+  const { mics, mine, changeable } = state.mics;
+  let close;
+  const list = el('div', { class: 'mic-list' }, mics.map(mic =>
+    el('button', {
+      class: `mic-option${mic.n === mine ? ' mine' : ''}`,
+      disabled: !changeable || mic.n === mine,
+      onclick: () => chooseMic(mic.n, close),
+    }, micBox(mic, true), el('span', { class: 'mic-name', text: mic.name || t('mic_free') }))));
+  close = openSheet(el('div', { class: 'form mic-picker' },
+    el('h2', { text: t('mic_title') }),
+    el('p', { text: mics.length ? (changeable ? t('mic_text') : t('mic_not_now')) : t('mic_none') }),
+    list,
+    mine && changeable ? el('button', { class: 'btn-ghost', text: t('mic_leave'), onclick: () => chooseMic(0, close) }) : null));
+}
+
+// ---------- achievements ----------
+
+// a gold crown like the one of the song selection
+function crownIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 20');
+  svg.setAttribute('class', 'crown-icon');
+  svg.innerHTML = '<path d="M2 15 L1 6 L7 10 L12 2 L17 10 L23 6 L22 15 Z" fill="#fcc626" stroke="#331f05" stroke-width="1.6" stroke-linejoin="round"/>'
+    + '<rect x="2" y="14.5" width="20" height="4" rx="1" fill="#f59e1f" stroke="#331f05" stroke-width="1.6"/>'
+    + '<circle cx="1.5" cy="5.5" r="1.8" fill="#fcc626" stroke="#331f05" stroke-width="1.2"/>'
+    + '<circle cx="12" cy="2" r="1.8" fill="#fcc626" stroke="#331f05" stroke-width="1.2"/>'
+    + '<circle cx="22.5" cy="5.5" r="1.8" fill="#fcc626" stroke="#331f05" stroke-width="1.2"/>';
+  return svg;
+}
+
+function crownLabel(n) {
+  return el('span', { class: 'crown-label' }, crownIcon(), n > 1 ? el('span', { text: `×${n}` }) : null);
+}
+
+function renderCrownBadge() {
+  const n = state.mics.crown || 0;
+  $('crownBadge').classList.toggle('hidden', n === 0);
+  if (n) {
+    $('crownBadge').replaceChildren(crownLabel(n));
+    $('crownBadge').title = t('crown_now', n);
+  }
+}
+
+
+async function refreshRecords() {
+  let data;
+  try {
+    data = await api('/api/records');
+  } catch (error) {
+    $('records').replaceChildren(el('p', { class: 'summary', text: errorText(error) }));
+    return;
+  }
+  if (!data.nick) {
+    $('records').replaceChildren(
+      el('p', { class: 'summary', text: t('records_nick') }),
+      el('button', { class: 'btn-primary', text: t('change_nick'), onclick: async () => { if (await askNick()) refreshRecords(); } }));
+    return;
+  }
+  // the best ratings first
+  const tiles = [...data.ratings].reverse().map(r => {
+    const got = r.total > 0;
+    return el('div', { class: `record${got ? ' got' : ''}` },
+      el('img', { src: `/api/icon/rating${r.n}`, alt: '' }),
+      el('div', { class: 'record-name', text: t('rating_' + r.n) }),
+      el('div', { class: 'record-count', text: got ? `×${r.total}` : t('records_never') }),
+      r.session ? el('div', { class: 'record-session', text: t('records_session', r.session) }) : null);
+  });
+  const streak = el('div', { class: 'streak' },
+    crownIcon(),
+    el('div', {},
+      el('div', { class: 'record-name', text: t('best_streak') }),
+      el('div', { class: 'summary', text: data.bestStreak ? t('streak_songs', data.bestStreak) : t('streak_none') })),
+    data.bestStreak ? el('div', { class: 'record-count', text: `×${data.bestStreak}` }) : null);
+  if (!data.bestStreak) streak.classList.add('none');
+  $('records').replaceChildren(
+    el('h2', { class: 'records-title' }, t('records_title', data.nick), data.crown ? crownLabel(data.crown) : null),
+    data.crown ? el('p', { class: 'crown-now', text: t('crown_now', data.crown) }) : null,
+    el('p', { class: 'summary', text: t('records_text') }),
+    streak,
+    el('div', { class: 'records-grid' }, tiles));
+}
+
+// ---------- sharing the page (tap the logo) ----------
+
+// a little show: the logo spins and some notes fly out of it
+function logoParty() {
+  const logo = $('brandLogo');
+  logo.classList.remove('party');
+  void logo.offsetWidth; // restart the animation
+  logo.classList.add('party');
+  const rect = logo.getBoundingClientRect();
+  ['♪', '♫', '♬', '♩', '♪', '♫'].forEach((note, i) => {
+    const n = el('span', { class: 'note-fly', text: note });
+    n.style.left = `${rect.left + rect.width / 2}px`;
+    n.style.top = `${rect.top + rect.height / 2}px`;
+    n.style.setProperty('--dx', `${(Math.random() * 2 - 1) * 70 + 40}px`);
+    n.style.setProperty('--dy', `${-60 - Math.random() * 80}px`);
+    n.style.setProperty('--rot', `${(Math.random() * 2 - 1) * 60}deg`);
+    n.style.animationDelay = `${i * 60}ms`;
+    document.body.append(n);
+    setTimeout(() => n.remove(), 1400);
+  });
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    // plain http: no clipboard API, copy through a hidden field
+    const area = el('textarea', { readonly: true, style: 'position:fixed;opacity:0' });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+    area.remove();
+    return ok;
+  }
+}
+
+async function openShare() {
+  logoParty();
+  let data;
+  try {
+    data = await api('/api/qr');
+  } catch (error) {
+    toast(errorText(error), 'error');
+    return;
+  }
+  await new Promise(resolve => setTimeout(resolve, 450));
+  const qr = el('div', { class: 'share-qr' });
+  qr.innerHTML = data.svg; // made by the game, not user input
+  const buttons = el('div', { class: 'request-row' },
+    navigator.share ? el('button', { class: 'btn-primary', text: t('share_button'),
+      onclick: () => navigator.share({ title: t('page_title'), url: data.url }).catch(() => {}) }) : null,
+    el('button', { class: navigator.share ? 'btn-ghost' : 'btn-primary', text: t('copy_link'),
+      onclick: async () => toast(await copyText(data.url) ? t('link_copied') : data.url, 'ok') }));
+  openSheet(el('div', { class: 'detail share' },
+    el('h2', { text: t('share_title') }),
+    el('p', { class: 'summary', text: t('share_text') }),
+    qr,
+    el('div', { class: 'share-url', text: data.url }),
+    buttons));
 }
 
 // ---------- queue ----------
@@ -626,11 +954,15 @@ function setTab(tab) {
   state.tab = tab;
   $('tabSongs').classList.toggle('active', tab === 'songs');
   $('tabQueue').classList.toggle('active', tab === 'queue');
+  $('tabRecords').classList.toggle('active', tab === 'records');
   $('songsView').classList.toggle('hidden', tab !== 'songs');
   $('queueView').classList.toggle('hidden', tab !== 'queue');
+  $('recordsView').classList.toggle('hidden', tab !== 'records');
   renderIndex();
   $('toTop').classList.toggle('hidden', tab !== 'songs' || window.scrollY < 1500);
+  $('luckyBtn').classList.toggle('hidden', tab !== 'songs');
   if (tab === 'queue') refreshQueue();
+  if (tab === 'records') refreshRecords();
 }
 
 // ---------- start ----------
@@ -662,7 +994,13 @@ async function start() {
   });
   $('tabSongs').addEventListener('click', () => setTab('songs'));
   $('tabQueue').addEventListener('click', () => setTab('queue'));
+  $('tabRecords').addEventListener('click', () => setTab('records'));
+  $('tourLink').addEventListener('click', e => { e.preventDefault(); startTour(); });
+  $('brand').addEventListener('click', openShare);
   $('nickChip').addEventListener('click', askNick);
+  $('micChip').addEventListener('click', openMicPicker);
+  document.body.append(luckyButton('floating'));
+  document.querySelector('.qblock.floating').id = 'luckyBtn';
   $('autoplayChip').addEventListener('click', toggleAutoplay);
   renderAutoplay();
   window.addEventListener('resize', debounce(fitHeader, 150));
@@ -677,10 +1015,17 @@ async function start() {
   }
   loadSongs();
   refreshQueue();
-  if (!state.info.me.nick) askNick();
+  refreshMics();
+  // the nickname first, then the guide on the first visit
+  (state.info.me.nick ? Promise.resolve(true) : askNick()).then(maybeStartTour);
 
   // poll often while the page is visible, not at all in the background
-  setInterval(() => { if (!document.hidden) refreshQueue(); }, 4000);
+  setInterval(() => {
+    if (document.hidden) return;
+    refreshQueue();
+    refreshMics();
+    if (state.tab === 'records') refreshRecords();
+  }, 4000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshQueue(); });
   setInterval(updateNowProgress, 1000);
   setInterval(() => { if (!document.hidden) loadInfo().catch(() => {}); }, 30000);
