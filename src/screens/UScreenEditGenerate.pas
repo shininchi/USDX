@@ -67,6 +67,9 @@ type
 
       Source:  UTF8String;  // file or link for a new song
       Editing: boolean;
+      // the generator's last result was replaced by a new choice: show
+      // "Generate" again instead of it
+      ResultDismissed: boolean;
       Buffer:  UTF8String;
 
       procedure FindSongsWithoutLyrics;
@@ -114,7 +117,7 @@ begin
     Result := Text;
     Exit;
   end;
-  Result := '…';
+  Result := '...'; // plain dots: the source file is not read as UTF-8
   Start := Length(Chars) - 1 - (MAX_SHOWN_CHARS - 1);
   for I := Start to Length(Chars) - 2 do
     Result := Result + UCS4ToUTF8String(Chars[I]);
@@ -298,7 +301,11 @@ begin
   else if SelSong > 0 then
     SourceText := ExtractFileName(SongAudios[SelSong])
   else if Source <> '' then
-    SourceText := Shorten(Source)
+    // a file shows its name; a link, its end
+    if FileExists(Source) then
+      SourceText := Shorten(ExtractFileName(Source))
+    else
+      SourceText := Shorten(Source)
   else
     SourceText := Language.Translate('SING_EDIT_GENERATE_SOURCE_HINT');
   if (not Editing) and
@@ -309,7 +316,8 @@ begin
     Format(Language.Translate('SING_EDIT_GENERATE_SOURCE'), [SourceText]);
 
   StartText := Language.Translate('SING_EDIT_GENERATE_START');
-  if SongGenerator <> nil then
+  if (SongGenerator <> nil) and
+     ((SongGenerator.State = gsRunning) or not ResultDismissed) then
     case SongGenerator.State of
       gsRunning:
         begin
@@ -322,7 +330,12 @@ begin
              Seconds div 60, Seconds mod 60]);
         end;
       gsDone:
-        StartText := Language.Translate('SING_EDIT_GENERATE_DONE');
+        if SongGenerator.LyricsSource = 'lrclib' then
+          StartText := Language.Translate('SING_EDIT_GENERATE_DONE_LRCLIB')
+        else if SongGenerator.LyricsSource = 'user' then
+          StartText := Language.Translate('SING_EDIT_GENERATE_DONE_USER')
+        else
+          StartText := Language.Translate('SING_EDIT_GENERATE_DONE');
       gsFailed:
         if SongGenerator.Message = 'cancelled' then
           StartText := Language.Translate('SING_EDIT_GENERATE_CANCELLED')
@@ -344,6 +357,7 @@ begin
     SelSong := 0;
     SelectsS[Ord(iSongSlide)].SelectedOption := 0;
     Interaction := Ord(iStartButton);
+    ResultDismissed := true;
   end;
 
   if (SongGenerator <> nil) and (ListedVersion <> SongGenerator.Version) then
@@ -392,6 +406,7 @@ begin
     end;
   end;
 
+  ResultDismissed := false;
   if SongGenerator.Start(Input, Replace, LANGUAGE_CODES[SelLanguage]) then
     AudioPlayback.PlaySound(SoundLib.Start);
 end;
@@ -436,6 +451,7 @@ begin
       SDLK_RETURN:
         begin
           Source := Trim(Buffer);
+          ResultDismissed := true;
           Editing := false;
           if Source <> '' then
             Interaction := Ord(iStartButton);
@@ -484,12 +500,14 @@ begin
       begin
         AudioPlayback.PlaySound(SoundLib.Option);
         InteractInc;
+        ResultDismissed := true;
       end;
     SDLK_LEFT:
       if Interactions[SelInteraction].Typ = iSelectS then
       begin
         AudioPlayback.PlaySound(SoundLib.Option);
         InteractDec;
+        ResultDismissed := true;
       end;
   end;
 end;

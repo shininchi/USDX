@@ -23,6 +23,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
+import urllib.request
 
 import song_cleanup
 
@@ -75,6 +78,78 @@ def say(line):
 
 
 LYRICS_FILES = ("letra.txt", "lyrics.txt")
+LRCLIB = "https://lrclib.net/api/"
+LRCLIB_AGENT = "USDX song generator (https://github.com/shininchi/USDX)"
+
+
+def lrclib_request(path, params):
+    """JSON from LRCLIB's public API (None on errors), retrying when busy."""
+    url = LRCLIB + path + "?" + urllib.parse.urlencode(params)
+    for attempt in range(3):
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": LRCLIB_AGENT})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            if e.code not in (429, 500, 502, 503, 504):
+                print("LRCLIB: %s" % e, flush=True)
+                return None
+        except Exception as e:
+            print("LRCLIB: %s" % e, flush=True)
+            return None
+        time.sleep(2 + 3 * attempt)
+    print("LRCLIB is busy, using what Whisper hears", flush=True)
+    return None
+
+
+def audio_seconds(path, ffmpeg_dir):
+    ffprobe = os.path.join(ffmpeg_dir, "ffprobe") if ffmpeg_dir else "ffprobe"
+    try:
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of",
+                              "csv=p=0", path], capture_output=True, text=True, timeout=20).stdout
+        return float(out.strip())
+    except Exception:
+        return 0
+
+
+def fetch_lyrics(artist, title, seconds, folder):
+    """The song's lyrics from LRCLIB (https://lrclib.net), the synced ones
+    ("[mm:ss.xx] line") when there are, saved in folder; None if not found."""
+    found = None
+    if seconds:
+        found = lrclib_request("get", {"artist_name": artist, "track_name": title,
+                                       "duration": int(round(seconds))})
+    if not found:
+        results = lrclib_request("search", {"artist_name": artist, "track_name": title}) or []
+        # the same song: the closest length, within a few seconds
+        results = [r for r in results if r.get("plainLyrics") or r.get("syncedLyrics")]
+        if seconds:
+            results = [r for r in results if abs((r.get("duration") or 0) - seconds) <= 8]
+            results.sort(key=lambda r: abs((r.get("duration") or 0) - seconds))
+        found = results[0] if results else None
+    if not found or found.get("instrumental"):
+        return None
+    text = found.get("syncedLyrics") or found.get("plainLyrics")
+    if not text:
+        return None
+    path = os.path.join(folder, "lrclib.lyrics.txt")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text.strip() + "\n")
+    print("Lyrics from LRCLIB (%s): %s - %s" % ("synced" if found.get("syncedLyrics") else "plain",
+                                               found.get("artistName"), found.get("trackName")), flush=True)
+    return path
+
+
+def plain_lyrics(path):
+    """The lines of a lyrics file without LRC times."""
+    lines = []
+    for line in read_text(path).splitlines():
+        line = re.sub(r"^(\[\d+:\d+(?:[.:]\d+)?\])+", "", line).strip()
+        if line:
+            lines.append(line)
+    return lines
 
 
 def lyrics_in(folder):
@@ -176,9 +251,8 @@ def audio_only(path, work, ffmpeg_dir):
     return target
 
 
-def run_ultrasinger(args, out_dir, language):
+def run_ultrasinger(args, out_dir, language, lyrics):
     script = os.path.join(args.ultrasinger, "src", "UltraSinger.py")
-    lyrics = find_lyrics(args)
     hook = []
     if lyrics:
         print("Using the lyrics in " + lyrics, flush=True)
@@ -205,16 +279,22 @@ def run_ultrasinger(args, out_dir, language):
                             env=env, text=True, errors="replace", bufsize=1)
     last = None
     tail = []
+    song_written = False
     for raw in proc.stdout:
         line = ANSI.sub("", raw.rstrip("\r\n"))
         print(line, flush=True)
         tail = (tail + [line])[-20:]
+        # what comes after the song file (points, midi, sheet) is extra
+        if "Calculating Ultrastar Points" in line:
+            song_written = True
         for text, stage in STAGES:
             if text in line and stage != last:
                 last = stage
                 say("@@STAGE " + stage)
                 break
-    if proc.wait() != 0:
+    if proc.wait() != 0 and song_written:
+        print("UltraSinger failed after writing the song, which is kept", flush=True)
+    elif proc.returncode != 0:
         errors = [l for l in tail if "Error" in l or "error" in l]
         raise RuntimeError((errors or tail or ["UltraSinger failed"])[-1].strip())
 
@@ -263,7 +343,8 @@ def clean_up_song(txt, vocals, lyrics=None):
     if lyrics:
         import lyrics_hook
         lyric_lines = lyrics_hook.read_lyrics(lyrics)
-    body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines)
+    voiced = song_cleanup.vocal_activity(vocals) if vocals else []
+    body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines, voiced)
     with open(txt, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(header + body) + "\n")
 
@@ -382,12 +463,27 @@ def use_file_details(txt, original, ffmpeg_dir):
         f.write("\n".join(header + body) + "\n")
 
 
+def library_language(txt):
+    """UltraSinger writes the language in English; the songs of the library
+    say "Español" for Spanish."""
+    header, body = split_song(read_text(txt))
+    changed = False
+    for i, line in enumerate(header):
+        if tag_of(line) == "LANGUAGE" and line.split(":", 1)[1].strip().lower() == "spanish":
+            header[i] = "#LANGUAGE:Español"
+            changed = True
+    if changed:
+        with open(txt, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(header + body) + "\n")
+
+
 def find_txt(out_dir):
     for root, _dirs, files in os.walk(out_dir):
         if "cache" in os.path.relpath(root, out_dir).split(os.sep):
             continue
         for name in files:
-            if name.lower().endswith(".txt"):
+            if name.lower().endswith(".txt") and not name.lower().endswith(".lyrics.txt") \
+                    and name.lower() not in LYRICS_FILES:
                 return os.path.join(root, name)
     raise RuntimeError("UltraSinger did not write a song file")
 
@@ -464,6 +560,7 @@ def main():
     p.add_argument("--whisper", default="large-v2")
     p.add_argument("--language")
     p.add_argument("--lyrics")
+    p.add_argument("--no-lrclib", action="store_true")
     p.add_argument("--fallback-language", default="es")
     p.add_argument("--ffmpeg")
     args = p.parse_args()
@@ -479,8 +576,25 @@ def main():
         language = song_language(args.replace) if args.replace else None
         if not language:
             language = language_code(args.language)
+        # the lyrics: a file next to the song (corrected by hand), or LRCLIB's
+        lyrics = find_lyrics(args)
+        source = "user" if lyrics else "whisper"
+        if not lyrics and not args.no_lrclib:
+            names = None
+            if args.replace:
+                header = split_song(read_text(args.replace))[0]
+                values = {tag_of(l): l.split(":", 1)[1].strip() for l in header if ":" in l}
+                if values.get("ARTIST") and values.get("TITLE"):
+                    names = (values["ARTIST"], values["TITLE"])
+            elif os.path.isfile(args.input):
+                names = name_from_file(args.input, args.ffmpeg)
+            if names:
+                lyrics = fetch_lyrics(names[0], names[1], audio_seconds(args.input, args.ffmpeg), work)
+                if lyrics:
+                    source = "lrclib"
+        say("@@LYRICS " + source)
         try:
-            run_ultrasinger(args, work, language)
+            run_ultrasinger(args, work, language, lyrics)
         except RuntimeError as e:
             # Whisper sometimes takes a song for a language it cannot align
             # (Latin for a Spanish hymn): try again in the usual language
@@ -489,10 +603,10 @@ def main():
             print("Retrying in %s" % args.fallback_language, flush=True)
             shutil.rmtree(work, ignore_errors=True)
             os.makedirs(work)
-            run_ultrasinger(args, work, language_code(args.fallback_language))
+            run_ultrasinger(args, work, language_code(args.fallback_language), lyrics)
         txt = find_txt(work)
         say("@@STAGE write")
-        clean_up_song(txt, find_file(work, "vocals.wav"), find_lyrics(args))
+        clean_up_song(txt, find_file(work, "vocals.wav"), lyrics)
         if args.replace:
             result = replace_notes(args.replace, txt)
         else:
@@ -506,12 +620,17 @@ def main():
                 folder_name = os.path.splitext(os.path.basename(txt))[0]
             if os.path.isfile(args.input):
                 use_file_details(txt, args.input, args.ffmpeg)
+            library_language(txt)
             target = unique_dir(os.path.join(args.out, folder_name))
             shutil.move(song_dir, target)
             result = os.path.join(target, os.path.basename(txt))
-            lyrics = find_lyrics(args)
-            if lyrics:
+            if source == "user":
                 shutil.copy2(lyrics, os.path.join(target, LYRICS_FILES[0]))
+        if source == "lrclib" and not lyrics_in(os.path.dirname(result)):
+            # LRCLIB's lyrics, to be corrected by hand if needed
+            with open(os.path.join(os.path.dirname(result), LYRICS_FILES[0]), "w",
+                      encoding="utf-8", newline="\n") as f:
+                f.write("\n".join(plain_lyrics(lyrics)) + "\n")
         write_heard_lyrics(result, find_file(work, "vocals.wav"))
         say("@@DONE " + result)
     except KeyboardInterrupt:

@@ -58,6 +58,7 @@ type
       fThread:    TThread;
       fState:     TGeneratorState;
       fStage:     UTF8String;
+      fLyricsSource: UTF8String; // where the lyrics came from: user, lrclib, whisper
       fMessage:   UTF8String;
       fResult:    UTF8String;  // txt written by the generator
       fReplace:   UTF8String;  // txt whose notes are replaced, empty = new song
@@ -73,6 +74,8 @@ type
       function GetMessage: UTF8String;
       function GetResult: UTF8String;
       procedure SetStage(const Stage: UTF8String);
+      procedure SetLyricsSource(const Source: UTF8String);
+      function GetLyricsSource: UTF8String;
       procedure Finish(Success: boolean; const Text: UTF8String);
       procedure ApplyResult;
     public
@@ -94,6 +97,7 @@ type
       property Stage: UTF8String read GetStage;
       property Message: UTF8String read GetMessage;
       property ResultFile: UTF8String read GetResult;
+      property LyricsSource: UTF8String read GetLyricsSource;
       property Input: UTF8String read fInput;
       property Replacing: UTF8String read fReplace;
       property Version: integer read fVersion;
@@ -165,6 +169,8 @@ procedure TGeneratorThread.HandleLine(const Line: UTF8String; var Success: boole
 begin
   if Copy(Line, 1, 8) = '@@STAGE ' then
     fOwner.SetStage(Trim(Copy(Line, 9, MaxInt)))
+  else if Copy(Line, 1, 9) = '@@LYRICS ' then
+    fOwner.SetLyricsSource(Trim(Copy(Line, 10, MaxInt)))
   else if Copy(Line, 1, 7) = '@@DONE ' then
   begin
     Success := true;
@@ -385,6 +391,20 @@ begin
   fLock.Leave;
 end;
 
+procedure TSongGenerator.SetLyricsSource(const Source: UTF8String);
+begin
+  fLock.Enter;
+  fLyricsSource := Source;
+  fLock.Leave;
+end;
+
+function TSongGenerator.GetLyricsSource: UTF8String;
+begin
+  fLock.Enter;
+  Result := fLyricsSource;
+  fLock.Leave;
+end;
+
 procedure TSongGenerator.Finish(Success: boolean; const Text: UTF8String);
 begin
   fLock.Enter;
@@ -426,6 +446,7 @@ begin
   try
     fState := gsRunning;
     fStage := '';
+    fLyricsSource := '';
     fMessage := '';
     fResult := '';
     fPending := false;

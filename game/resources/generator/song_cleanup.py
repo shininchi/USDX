@@ -196,6 +196,57 @@ def snap_words(notes, onsets, gap, beat_seconds):
         prev_start = word[-1].start
 
 
+LONG_SYLLABLE = 0.8   # seconds: a middle syllable longer than this (and than
+                      # 2.5 times the song's usual one) is stretched
+
+
+def shorten_long_syllables(notes, beat_seconds):
+    """Gives back to the last syllable the time UltraSinger spread over the
+    others: it shares a word's time, long held last vowel included, among
+    its syllables, so in "sal...va...ción" sung slowly "va" comes a second
+    or two after it is heard. Sung syllables follow each other and the last
+    one holds, so a middle syllable much longer than usual is shortened and
+    the next one starts sooner. Returns the new list of notes."""
+    sylls_of = []
+    lengths = []
+    for word in words(notes):
+        sylls = []
+        for note in word:
+            if sylls and note.is_continuation:
+                sylls[-1].append(note)
+            else:
+                sylls.append([note])
+        sylls_of.append(sylls)
+        for syll, nxt in zip(sylls, sylls[1:]):
+            lengths.append((nxt[0].start - syll[0].start) * beat_seconds)
+    if not lengths:
+        return notes
+    usual = sorted(lengths)[len(lengths) // 2]
+    too_long = max(LONG_SYLLABLE, 2.5 * usual)
+    target = max(0.6, 1.5 * usual)
+    target_beats = max(1, round(target / beat_seconds))
+    result = []
+    for sylls in sylls_of:
+        for i, syll in enumerate(sylls):
+            if i == len(sylls) - 1:
+                result.extend(syll)
+                continue
+            nxt = sylls[i + 1]
+            span = nxt[0].start - syll[0].start
+            if span * beat_seconds <= too_long:
+                result.extend(syll)
+                continue
+            # one note of a usual length, the next syllable starts sooner
+            main = max(syll, key=lambda n: n.length)
+            start = syll[0].start
+            result.append(Note(syll[0].kind, start, target_beats, main.pitch, syll[0].text.rstrip(" ")))
+            first = nxt[0]
+            new_start = start + target_beats
+            first.length = first.end - new_start
+            first.start = new_start
+    return result
+
+
 def break_cost(prev_text, next_text, pause, in_exclamation):
     """Cost of a line break between two words; negative = a good place."""
     cost = -4.0 * min(pause, 2.0)
@@ -262,21 +313,71 @@ def break_lines(notes, beat_seconds):
 
 
 def lines_like_lyrics(notes, lyric_lines):
-    """Lines with as many words as the lines of the given lyrics."""
+    """The lines of the given lyrics: each sung word is matched with the
+    lyrics, so a word that was lost or split does not shift the lines after
+    it; words without a match stay in the line of the word before."""
+    import difflib
     ws = words(notes)
-    lines, pos = [], 0
-    for line in lyric_lines:
-        count = len(line.split())
-        if count == 0 or pos >= len(ws):
-            continue
-        lines.append(ws[pos:pos + count])
-        pos += count
-    if pos < len(ws):  # words the lyrics do not have
-        lines.append(ws[pos:])
+    lyric_words, owner = [], []
+    for i, line in enumerate(lyric_lines):
+        for w in line.split():
+            lyric_words.append(Normalize(w))
+            owner.append(i)
+    sung = [Normalize(word_text(w)) for w in ws]
+    line_of = [None] * len(ws)
+    matcher = difflib.SequenceMatcher(None, sung, lyric_words, autojunk=False)
+    for a, b, size in matcher.get_matching_blocks():
+        for k in range(size):
+            line_of[a + k] = owner[b + k]
+    # words that do not match (a lost syllable changed them): by position
+    for tag, a1, a2, b1, b2 in matcher.get_opcodes():
+        if tag == "replace":
+            for k in range(a1, a2):
+                if line_of[k] is None and b1 < b2:
+                    line_of[k] = owner[min(b2 - 1, b1 + (k - a1))]
+    lines, current, current_line = [], [], None
+    for w, line in zip(ws, line_of):
+        if line is not None and current and line != current_line:
+            lines.append(current)
+            current = []
+        if line is not None:
+            current_line = line
+        current.append(w)
+    if current:
+        lines.append(current)
     return lines
 
 
-def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None):
+def Normalize(text):
+    import unicodedata
+    text = unicodedata.normalize("NFD", text.lower())
+    return "".join(c for c in text if c.isalnum() and unicodedata.category(c) != "Mn")
+
+
+LINE_END_MIN = 0.15   # seconds the last syllable of a line keeps at least
+VOICE_GONE = 0.12     # seconds of silence that end the voice
+
+
+def trim_line_end(note, voiced, gap, beat_seconds):
+    """Ends the last syllable of a line where the voice stops: the notes
+    often hold on over the music after the singer is done."""
+    if not voiced:
+        return
+    start = gap + note.start * beat_seconds
+    end = gap + note.end * beat_seconds
+    frame = 0.01
+    need = int(VOICE_GONE / frame)
+    i = int((start + LINE_END_MIN) / frame)
+    last = min(len(voiced), int(end / frame))
+    while i < last:
+        if not voiced[i] and all(not v for v in voiced[i:i + need]):
+            new_end = i * frame
+            note.length = max(1, int(round((new_end - gap) / beat_seconds)) - note.start)
+            return
+        i += 1
+
+
+def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None):
     beat_seconds = 60.0 / (bpm * 4)
     notes = parse_notes(body)
     if not notes:
@@ -287,12 +388,18 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None):
     for group in syllables(notes):
         merged.extend(merge_syllable(group, beat_seconds))
     snap_words(merged, onsets, gap_ms / 1000.0, beat_seconds)
+    merged = shorten_long_syllables(merged, beat_seconds)
     # merging and moving may not make a note run into the next one
     for a, b in zip(merged, merged[1:]):
         if a.end > b.start:
             a.length = max(1, b.start - a.start)
 
     out = []
+    # the last syllable of each line ends with the voice
+    if voiced:
+        for line in (lines_like_lyrics(merged, lyric_lines) if lyric_lines else break_lines(merged, beat_seconds)):
+            if line and line[-1]:
+                trim_line_end(line[-1][-1], voiced, gap_ms / 1000.0, beat_seconds)
     if lyric_lines:
         lines = lines_like_lyrics(merged, lyric_lines)
     else:
@@ -307,6 +414,20 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None):
             out.append("- %d" % (last.end + max(0, following.start - last.end) // 2))
     out.append("E")
     return out
+
+
+def vocal_activity(vocals_wav):
+    """For each 10 ms of the separated vocals, whether the voice sounds."""
+    try:
+        import librosa
+        import numpy as np
+        y, sr = librosa.load(vocals_wav, sr=16000, mono=True)
+        rms = librosa.feature.rms(y=y, frame_length=640, hop_length=160)[0]
+        db = librosa.amplitude_to_db(rms, ref=np.max)
+        return list(db > -32)
+    except Exception as e:  # cleaning up still works without it
+        print("No vocal activity: %s" % e, flush=True)
+        return []
 
 
 def vocal_onsets(vocals_wav):
