@@ -3,10 +3,11 @@
 Usage: python lyrics_hook.py LYRICS_FILE UltraSinger.py [UltraSinger options]
 
 Whisper mishears sung words ("gala bombonera" for "La Rosaleda"). When the
-real lyrics are known, this hook keeps Whisper only for timing: each lyric
-line is placed where the transcription heard the most similar words, and
-whisperx then aligns the real words inside that time window. Everything
-else (separation, pitch, writing the song) is UltraSinger as usual.
+real lyrics are known, whisperx aligns them instead, each line inside a
+time window: the line's own time when the lyrics are synced (LRCLIB's),
+moved to fit this recording, and otherwise where the transcription heard
+the most similar words. Everything else (separation, pitch, writing the
+song) is UltraSinger as usual.
 
 The lyrics file is plain text, one sung line per line, with repeated
 choruses written out as they are sung. Empty lines and [Chorus]-like tags
@@ -90,7 +91,7 @@ def heard_words(segments):
             start = seg["start"] + duration * pos / total
             pos += len(w) + 1
             end = seg["start"] + duration * pos / total
-            result.append((normalize(w), start, end))
+            result.append((normalize(w), start, end, w is words[0]))
     return result
 
 
@@ -111,26 +112,107 @@ def line_spans(lines, heard):
     return spans
 
 
-def checked_times(timed, segments):
-    """Synced times as they fit this recording: LRCLIB may have them for
-    another one (a longer intro...). The lines Whisper heard tell the shift;
-    if they do not agree on one, the times are not used (None)."""
+def median(values):
+    values = sorted(values)
+    return values[len(values) // 2]
+
+
+def line_starts(lines, heard):
+    """When the transcription heard each line begin (its first word), None
+    for the lines whose first word it did not hear."""
+    words, owner, first = [], [], []
+    for i, line in enumerate(lines):
+        for k, w in enumerate(line.split()):
+            words.append(normalize(w))
+            owner.append(i)
+            first.append(k == 0)
+    starts, opening = [None] * len(lines), [None] * len(lines)
+    matcher = difflib.SequenceMatcher(None, [h[0] for h in heard], words, autojunk=False)
+    for a, b, size in matcher.get_matching_blocks():
+        for k in range(size):
+            if first[b + k] and starts[owner[b + k]] is None:
+                starts[owner[b + k]] = heard[a + k][1]
+                if heard[a + k][3]:
+                    opening[owner[b + k]] = heard[a + k][1]
+    # only the words that open a segment have a time of their own; the
+    # others are spread over it by their length, which is rough
+    if sum(1 for s in opening if s is not None) >= 3:
+        return opening
+    return starts
+
+
+def fitted_times(timed, segments):
+    """Synced times moved to fit this recording. LRCLIB has them for one
+    version of the song, and another one (a videoclip) may have a longer
+    intro or an extra bit in the middle: the song is cut in stretches with
+    one shift each, which the lines Whisper heard tell. Whisper is only
+    asked how far the lines are, never where each one goes. None when the
+    times do not fit the recording at all."""
     heard = heard_words(segments)
-    lines = [text for _, text in timed if text]
-    starts = [start for start, text in timed if text]
-    spans = line_spans(lines, heard) if heard else []
-    deltas = sorted(span[0] - start for span, start in zip(spans, starts) if span)
+    entries = [k for k, (start, text) in enumerate(timed) if text]
+    starts = line_starts([timed[k][1] for k in entries], heard) if heard else []
+    deltas = [(n, s - timed[entries[n]][0]) for n, s in enumerate(starts) if s is not None]
     if len(deltas) < 3:
         return timed
-    shift = deltas[len(deltas) // 2]
-    spread = sorted(abs(d - shift) for d in deltas)[len(deltas) // 2]
+    # shift around each heard line (its neighbours too: Whisper's times are
+    # rough, and a repeated chorus may be matched to another repetition)
+    local = [median([d for _, d in deltas[max(0, m - 3):m + 4]]) for m in range(len(deltas))]
+    # stretches: a new one starts where the shift changes and stays changed
+    blocks = [[0]]
+    for m in range(1, len(deltas)):
+        current = median([deltas[x][1] for x in blocks[-1]])
+        if abs(local[m] - current) > 1.0 and m + 1 < len(deltas) and abs(local[m + 1] - current) > 1.0:
+            blocks.append([m])
+        else:
+            blocks[-1].append(m)
+    # a stretch of one or two lines is Whisper being wrong, not the song
+    merged = []
+    for block in blocks:
+        if merged and len(block) < 3:
+            merged[-1] += block
+        elif merged and len(merged[-1]) < 3:
+            merged[-1] += block
+        else:
+            merged.append(block)
+    shifts = [median([deltas[x][1] for x in block]) for block in merged]
+    # the shift around a line lags behind where it changes: the lines at
+    # the edge of a stretch go with the shift closer to their own
+    for b in range(1, len(merged)):
+        before, after = merged[b - 1], merged[b]
+        while len(before) > 1 and abs(deltas[before[-1]][1] - shifts[b]) < abs(deltas[before[-1]][1] - shifts[b - 1]):
+            after.insert(0, before.pop())
+        while len(after) > 1 and abs(deltas[after[0]][1] - shifts[b - 1]) < abs(deltas[after[0]][1] - shifts[b]):
+            before.append(after.pop(0))
+    spread = median([abs(deltas[x][1] - shift) for block, shift in zip(merged, shifts) for x in block])
     if spread > 1.0:
-        print("[lyrics] the synced times do not fit this recording, not using them", flush=True)
+        print("[lyrics] the synced times do not fit this recording, using what Whisper hears", flush=True)
         return None
-    if abs(shift) > 0.15:
-        print("[lyrics] synced times moved %.2f s to fit this recording" % shift, flush=True)
-        return [(None if start is None else start + shift, text) for start, text in timed]
-    return timed
+    # each line's shift: the one of its stretch; between two stretches the
+    # change goes in the longest pause between lines (where a bit was added)
+    line_shift = [shifts[0]] * len(entries)
+    for b in range(len(merged)):
+        first = deltas[merged[b][0]][0]
+        for n in range(first, len(entries)):
+            line_shift[n] = shifts[b]
+        if b:
+            last_before = deltas[merged[b - 1][-1]][0]
+            if first - last_before > 1:
+                gaps = [(timed[entries[n]][0] - timed[entries[n - 1]][0], n) for n in range(last_before + 1, first + 1)]
+                cut = max(gaps)[1]
+                for n in range(cut, first):
+                    line_shift[n] = shifts[b]
+    print("[lyrics] synced times moved to fit this recording: %s"
+          % ", ".join("%+.2f s from line %d" % (shift, deltas[block[0]][0] + 1) if b else "%+.2f s" % shift
+                      for b, (block, shift) in enumerate(zip(merged, shifts))), flush=True)
+    result, n = [], 0
+    for k, (start, text) in enumerate(timed):
+        if text:
+            n = entries.index(k)
+            result.append((start + line_shift[n], text))
+        else:
+            # the end of a line: moved as the line before it
+            result.append((None if start is None else start + line_shift[n], text))
+    return result
 
 
 def lyric_segments(lines, segments, audio_seconds=None):
@@ -215,6 +297,46 @@ def lyric_segments(lines, segments, audio_seconds=None):
     return result
 
 
+def voiced_frames(audio):
+    """For each 10 ms of the (16 kHz) vocals, whether the voice sounds."""
+    try:
+        import librosa
+        import numpy as np
+        rms = librosa.feature.rms(y=np.asarray(audio, dtype=np.float32), frame_length=640, hop_length=160)[0]
+        return list(librosa.amplitude_to_db(rms, ref=np.max) > -40)
+    except Exception as e:  # aligning still works without it
+        print("[lyrics] no vocal activity: %s" % e, flush=True)
+        return []
+
+
+def trim_line_edges(aligned, voiced):
+    """The aligner gives the first word of a line the silence before it
+    and stretches the last one to the end of its window, over the start of
+    the next line (which UltraSinger then pushes later, word after word):
+    they are cut to where the voice sounds."""
+    def sounds(t):
+        f = int(t * 100)
+        return 0 <= f < len(voiced) and voiced[f]
+    lines = [[w for w in seg.get("words", []) if "start" in w and "end" in w] for seg in aligned]
+    lines = [words for words in lines if words]
+    for n, words in enumerate(lines):
+        first, last = words[0], words[-1]
+        if voiced:
+            t = first["start"]
+            while t < first["end"] - 0.1 and not (sounds(t) and sounds(t + 0.01) and sounds(t + 0.02)):
+                t += 0.01
+            first["start"] = round(t, 3)
+            t = last["end"]
+            while t > last["start"] + 0.1 and not sounds(t):
+                t -= 0.01
+            last["end"] = round(t + 0.01, 3)
+        if n + 1 < len(lines):
+            next_start = lines[n + 1][0]["start"]
+            if last["end"] > next_start - 0.02:
+                last["end"] = round(max(last["start"] + 0.05, next_start - 0.02), 3)
+    return aligned
+
+
 def install(lyrics_path):
     import whisperx
     timed = read_timed_lyrics(lyrics_path)
@@ -224,8 +346,13 @@ def install(lyrics_path):
     def align(segments, model, metadata, audio, *args, **kwargs):
         if lines:
             seconds = len(audio) / 16000.0 if hasattr(audio, "__len__") else None
-            fitted = checked_times(timed, segments) if timed and all(t is not None for t, _ in timed) else None
-            segments = (fitted and timed_segments(fitted, seconds)) or lyric_segments(lines, segments, seconds)
+            fitted = fitted_times(timed, segments) if timed and all(t is not None for t, _ in timed) else None
+            placed = fitted and timed_segments(fitted, seconds)
+            if placed:
+                result = original_align(placed, model, metadata, audio, *args, **kwargs)
+                trim_line_edges(result.get("segments", []), voiced_frames(audio))
+                return result
+            segments = lyric_segments(lines, segments, seconds)
         return original_align(segments, model, metadata, audio, *args, **kwargs)
 
     whisperx.align = align
