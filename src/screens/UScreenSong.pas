@@ -4271,6 +4271,7 @@ begin
     StopMusicPreview();
     AudioPlayback.PlaySound(SoundLib.Start);
     CurrentSong := CatSongs.Song[Interaction];
+    ScreenEditSub.BackScreen := nil;
     FadeTo(@ScreenEditSub);
   end
   {else if (CatSongs.Song[Interaction].isDuet) then

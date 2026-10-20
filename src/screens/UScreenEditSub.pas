@@ -443,6 +443,10 @@ type
     public
       Tex_PrevBackground:      TTexture;
       FadeOut:                 boolean;
+      // where leaving the editor goes, nil = the song list
+      BackScreen:              PMenu;
+
+      function  ExitScreen: PMenu;
 
       constructor Create; override;
       destructor Destroy; override;
@@ -519,7 +523,7 @@ begin
   begin
     Display.CheckOK := false;
     AudioPlayback.Stop;
-    Display.FadeTo(@ScreenSong);
+    Display.FadeTo(ScreenEditSub.ExitScreen);
   end;
 end;
 
@@ -1343,7 +1347,7 @@ begin
   if length(UndoLines) > 0 then
     ScreenPopupcheck.ShowPopup(Language.Translate('EDIT_INFO_EXIT'), OnExit, nil, false)
   else
-    FadeTo(@ScreenSong);
+    FadeTo(ExitScreen);
 end;
 
       // SDLK_TAB: ShowPopupHelp;
@@ -3206,7 +3210,7 @@ begin
     end
     else
     begin
-      FadeTo(@ScreenSong);
+      FadeTo(ExitScreen);
     end;
   end;
 
@@ -5387,6 +5391,14 @@ begin
   inherited;
 end;
 
+function TScreenEditSub.ExitScreen: PMenu;
+begin
+  if BackScreen <> nil then
+    Result := BackScreen
+  else
+    Result := @ScreenSong;
+end;
+
 procedure TScreenEditSub.OnShow;
 const
   SUPPORTED_EXTS_AUDIO: array[0..4]  of string = ('.mp3', '.flac', '.wav', '.ogg', '.m4a');
@@ -5440,7 +5452,7 @@ begin
   if Error then
   begin
     //Error Loading Song -> Go back to Song Screen and Show some Error Message
-    FadeTo(@ScreenSong);
+    FadeTo(ExitScreen);
     ScreenPopupError.ShowPopup (Language.Translate('ERROR_CORRUPT_SONG'));
     Exit;
   end

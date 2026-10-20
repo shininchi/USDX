@@ -65,6 +65,12 @@ LANGUAGE_CODES = {
 
 CHILD = None
 
+# new songs say in their title which generator made them and what placed
+# their lines ("La salvación [A Whisper]"), to compare the two generators:
+# A places the lines where Whisper hears them, B by LRCLIB's synced times
+VARIANT = "A"
+PLACED_BY = "Whisper"
+
 
 def stop(_signum, _frame):
     # the game cancels by terminating this script; take UltraSinger with it
@@ -252,6 +258,8 @@ def audio_only(path, work, ffmpeg_dir):
 
 
 def run_ultrasinger(args, out_dir, language, lyrics):
+    global PLACED_BY
+    PLACED_BY = "Whisper"
     script = os.path.join(args.ultrasinger, "src", "UltraSinger.py")
     hook = []
     if lyrics:
@@ -287,6 +295,8 @@ def run_ultrasinger(args, out_dir, language, lyrics):
         # what comes after the song file (points, midi, sheet) is extra
         if "Calculating Ultrastar Points" in line:
             song_written = True
+        if "lines placed by their synced times" in line:  # lyrics_hook
+            PLACED_BY = "LRCLIB"
         for text, stage in STAGES:
             if text in line and stage != last:
                 last = stage
@@ -376,6 +386,14 @@ def name_from_file(path, ffmpeg_dir=None):
         return None
     artist, title = (p.strip() for p in base.split(" - ", 1))
     return (artist, title) if artist and title else None
+
+
+def artist_title(txt):
+    """(artist, title) of a song file, None if it lacks them."""
+    tags = {tag_of(l): l.split(":", 1)[1].strip() for l in split_song(read_text(txt))[0] if ":" in l}
+    if tags.get("ARTIST") and tags.get("TITLE"):
+        return tags["ARTIST"], tags["TITLE"]
+    return None
 
 
 def set_artist_title(txt, artist, title):
@@ -614,7 +632,10 @@ def main():
             shutil.rmtree(os.path.join(song_dir, "cache"), ignore_errors=True)
             folder_name = os.path.basename(song_dir)
             names = name_from_file(args.input, args.ffmpeg) if os.path.isfile(args.input) else None
+            if not names:
+                names = artist_title(txt)
             if names:
+                names = (names[0], "%s [%s %s]" % (names[1], VARIANT, PLACED_BY))
                 set_artist_title(txt, *names)
                 txt = rename_song_files(txt, *names)
                 folder_name = os.path.splitext(os.path.basename(txt))[0]

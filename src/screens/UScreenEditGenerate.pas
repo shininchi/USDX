@@ -27,7 +27,8 @@ unit UScreenEditGenerate;
  * either for a song that has audio but no lyrics yet, or for a new song from
  * an audio/video file or a YouTube link. The generator leaves the lyrics it
  * heard in letra.txt; once corrected, generating again uses them. The generation goes on in the
- * background when leaving the screen.
+ * background when leaving the screen. A generated song opens in the editor
+ * for the details, and the editor comes back here.
  *}
 
 interface
@@ -50,6 +51,7 @@ type
     iLanguageSlide,
     iSourceButton,
     iStartButton,
+    iEditorButton,
     iBackButton
   );
 
@@ -59,6 +61,8 @@ type
       SelLanguage:  integer;
       ButtonSource: integer;
       ButtonStart:  integer;
+      ButtonEditor: integer;
+      TextHelp:     integer;  // the description line, telling what the selected row does
 
       SongNames:  array of UTF8String;  // slide options, [0] = new song
       SongFiles:  array of UTF8String;  // txt of each listed song
@@ -75,6 +79,9 @@ type
       procedure FindSongsWithoutLyrics;
       procedure UpdateButtons;
       procedure StartOrCancel;
+      function EditorTarget: UTF8String;
+      procedure OpenEditor;
+      procedure UpdateHelp;
       procedure Leave;
     public
       constructor Create; override;
@@ -93,6 +100,7 @@ uses
   UGraphic,
   ULanguage,
   ULog,
+  UNote,
   UPath,
   USong,
   USongGenerator,
@@ -202,13 +210,21 @@ begin
 end;
 
 constructor TScreenEditGenerate.Create;
+var
+  I: integer;
+  Desc: UTF8String;
 begin
   inherited Create;
-  Description := Language.Translate('SING_EDIT_GENERATE_DESC');
+  Desc := Language.Translate('SING_EDIT_GENERATE_DESC');
+  Description := Desc;
   WhereAmI := Language.Translate('SING_EDIT_GENERATE_WHEREAMI');
   SetLength(SongNames, 1);
   SongNames[0] := Language.Translate('SING_EDIT_GENERATE_NEW');
   Load;
+  TextHelp := -1;
+  for I := 0 to High(Text) do
+    if (TextHelp < 0) and (Text[I].Text = Desc) then
+      TextHelp := I;
   ListedVersion := -1;
   Interaction := 0;
 end;
@@ -225,6 +241,7 @@ begin
   AddSelectSlide('SING_EDIT_GENERATE_LANGUAGE', SelLanguage, ILanguages);
   ButtonSource := AddButton('');
   ButtonStart := AddButton('');
+  ButtonEditor := AddButton('');
 end;
 
 procedure TScreenEditGenerate.FindSongsWithoutLyrics;
@@ -344,6 +361,85 @@ begin
             [Shorten(SongGenerator.Message)]);
     end;
   Button[ButtonStart].Text[0].Text := StartText;
+
+  if EditorTarget <> '' then
+    Button[ButtonEditor].Text[0].Text := Language.Translate('SING_EDIT_GENERATE_EDITOR')
+  else
+    Button[ButtonEditor].Text[0].Text := Language.Translate('SING_EDIT_GENERATE_EDITOR_NONE');
+  UpdateHelp;
+end;
+
+// what the selected row does, in the description line
+procedure TScreenEditGenerate.UpdateHelp;
+var
+  Key, Help: UTF8String;
+begin
+  if TextHelp < 0 then
+    Exit;
+  if Editing then
+    Key := 'TYPING'
+  else
+    case TGenerateOptionID(SelInteraction) of
+      iSongSlide:     Key := 'SONG';
+      iLanguageSlide: Key := 'LANGUAGE';
+      iSourceButton:  Key := 'SOURCE';
+      iStartButton:
+        if (SongGenerator <> nil) and (SongGenerator.State = gsRunning) then
+          Key := 'RUNNING'
+        else if (SongGenerator <> nil) and (SongGenerator.State = gsDone) and not ResultDismissed then
+          Key := 'DONE'
+        else
+          Key := 'START';
+      iEditorButton:  Key := 'EDITOR';
+    else
+      Key := 'BACK';
+    end;
+  Help := Language.Translate('SING_EDIT_GENERATE_HELP_' + Key);
+  if Text[TextHelp].Text <> Help then
+    Text[TextHelp].Text := Help;
+end;
+
+// the song the editor button opens: the chosen one, or the one just
+// generated; none while generating (the result would overwrite the edits)
+function TScreenEditGenerate.EditorTarget: UTF8String;
+begin
+  Result := '';
+  if (SongGenerator <> nil) and (SongGenerator.State = gsRunning) then
+    Exit;
+  if SelSong > 0 then
+    Result := SongFiles[SelSong]
+  else if (SongGenerator <> nil) and (SongGenerator.State = gsDone) and
+          not ResultDismissed and FileExists(SongGenerator.ResultFile) then
+    Result := SongGenerator.ResultFile;
+end;
+
+procedure TScreenEditGenerate.OpenEditor;
+var
+  Target: IPath;
+  Song: TSong;
+  I: integer;
+begin
+  if EditorTarget = '' then
+  begin
+    ScreenPopupError.ShowPopup(Language.Translate('SING_EDIT_GENERATE_EDITOR_NO_SONG'));
+    Exit;
+  end;
+  Target := Path(EditorTarget);
+  if Songs <> nil then
+    for I := 0 to Songs.SongList.Count - 1 do
+    begin
+      Song := TSong(Songs.SongList[I]);
+      if Song.Path.Append(Song.FileName).Equals(Target, true) then
+      begin
+        SDL_EventState(SDL_DROPFILE, SDL_DISABLE);
+        AudioPlayback.PlaySound(SoundLib.Start);
+        CurrentSong := Song;
+        ScreenEditSub.BackScreen := @ScreenEditGenerate;
+        FadeTo(@ScreenEditSub);
+        Exit;
+      end;
+    end;
+  ScreenPopupError.ShowPopup(Language.Translate('SING_EDIT_GENERATE_EDITOR_NO_SONG'));
 end;
 
 function TScreenEditGenerate.Draw: boolean;
@@ -489,7 +585,9 @@ begin
           Buffer := Source;
         end
         else if SelInteraction = Ord(iStartButton) then
-          StartOrCancel;
+          StartOrCancel
+        else if SelInteraction = Ord(iEditorButton) then
+          OpenEditor;
       end;
     SDLK_DOWN:
       InteractNext;
