@@ -68,7 +68,7 @@ CHILD = None
 # new songs say in their title which generator made them and what placed
 # their lines ("La salvación [A Whisper]"), to compare the two generators:
 # A places the lines where Whisper hears them, B by LRCLIB's synced times
-VARIANT = "A"
+VARIANT = "B"
 PLACED_BY = "Whisper"
 
 
@@ -137,6 +137,17 @@ def fetch_lyrics(artist, title, seconds, folder):
         found = results[0] if results else None
     if not found or found.get("instrumental"):
         return None
+    if not found.get("syncedLyrics"):
+        # synced lyrics of another version (a videoclip, longer or shorter)
+        # still place the lines: lyrics_hook moves them to fit this one, or
+        # leaves them out when they do not fit
+        synced = [r for r in lrclib_request("search", {"artist_name": artist, "track_name": title}) or []
+                  if r.get("syncedLyrics") and not r.get("instrumental")]
+        if seconds:
+            synced = [r for r in synced if abs((r.get("duration") or 0) - seconds) <= 30]
+            synced.sort(key=lambda r: abs((r.get("duration") or 0) - seconds))
+        if synced:
+            found = synced[0]
     text = found.get("syncedLyrics") or found.get("plainLyrics")
     if not text:
         return None
