@@ -266,7 +266,7 @@ function coverNode(song, full = false) {
   const initials = (song.artist || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
   const box = el('div', { class: 'cover' }, el('div', { class: 'initials', text: initials }));
   if (song.cover && song.id >= 0) {
-    const img = el('img', { alt: '', loading: 'lazy', decoding: 'async', src: `/api/cover/${song.id}${full ? '?full=1' : ''}` });
+    const img = el('img', { alt: '', loading: 'lazy', decoding: 'async', src: `/api/cover/${song.id}?v=${song.cover}${full ? '&full=1' : ''}` });
     img.addEventListener('load', () => img.classList.add('loaded'));
     img.addEventListener('error', () => img.remove());
     box.append(img);

@@ -583,7 +583,7 @@ function preloadCovers(songs, ms) {
   const loads = songs.filter(s => s.cover && s.id >= 0).map(s => new Promise(resolve => {
     const img = new Image();
     img.onload = img.onerror = resolve;
-    img.src = `/api/cover/${s.id}`;
+    img.src = `/api/cover/${s.id}?v=${s.cover}`;
   }));
   return Promise.race([Promise.all(loads), new Promise(resolve => setTimeout(resolve, ms))]);
 }
@@ -620,6 +620,10 @@ async function spinLucky() {
   setLuckyButtons(true);
 
   const chosen = items[Math.floor(Math.random() * items.length)];
+  // autoplay: browsers only play sound started by a tap, so the audio
+  // starts muted now and becomes the preview when the reel stops
+  if (lucky.primed) lucky.primed.pause();
+  lucky.primed = state.autoplay && chosen.audio ? primeAudio(chosen.id) : null;
   const withCovers = items.filter(s => s.cover);
   const passing = randomItems(withCovers.length >= 8 ? withCovers : items, REEL_COVERS, chosen);
   const detailPromise = api(`/api/songs/${chosen.id}`).catch(error => error);
@@ -628,6 +632,8 @@ async function spinLucky() {
     lucky.body = el('div', { class: 'lucky' });
     const sheet = el('div', {}, luckyButton('in-sheet'), lucky.body);
     lucky.close = openSheet(sheet, () => {
+      if (lucky.primed) lucky.primed.pause();
+      lucky.primed = null;
       if (lucky.detail) lucky.detail.onClose();
       lucky.body = lucky.close = lucky.detail = null;
       document.body.classList.remove('lucky-open');
@@ -675,7 +681,8 @@ async function spinLucky() {
   if (song instanceof Error) {
     caption.textContent = errorText(song);
   } else {
-    lucky.detail = songDetail(song, null, () => lucky.close && lucky.close());
+    lucky.detail = songDetail(song, lucky.primed, () => lucky.close && lucky.close());
+    lucky.primed = null; // the details own it now
     lucky.detail.node.classList.add('appear');
     await new Promise(resolve => setTimeout(resolve, 350));
     if (!lucky.body) return setLuckyButtons(false);

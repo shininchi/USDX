@@ -1887,6 +1887,17 @@ end;
 
 { JSON helpers }
 
+// tells the pages a song's cover, '' = none: covers are asked for by the
+// song's place in the list, which changes when songs are added, so the
+// address carries this to keep browsers from showing a cached other cover
+function CoverTag(const Key, Cover: UTF8String): UTF8String;
+begin
+  if Cover = '' then
+    Result := ''
+  else
+    Result := Format('%.8x', [HashString(Key + '|' + Cover)]);
+end;
+
 function TSongRequests.SongToJSON(Index: integer; const UserId: UTF8String): TJSONObject;
 var
   Request: TSRRequest;
@@ -1904,7 +1915,7 @@ begin
     Result.Add('year', Year);
     Result.Add('duet', Duet);
     Result.Add('video', HasVideo);
-    Result.Add('cover', CoverFile <> '');
+    Result.Add('cover', CoverTag(Key, CoverFile));
     Result.Add('audio', AudioFile <> '');
     case Medley of
       2: Result.Add('medley', 'tag');
@@ -1947,7 +1958,10 @@ begin
   Result.Add('votes', Request.Voters.Count);
   Result.Add('voted', Request.Voters.IndexOf(UserId) >= 0);
   Result.Add('pinned', Request.PinnedAt <> 0);
-  Result.Add('cover', (Idx >= 0) and (fSongs[Idx].CoverFile <> ''));
+  if Idx >= 0 then
+    Result.Add('cover', CoverTag(fSongs[Idx].Key, fSongs[Idx].CoverFile))
+  else
+    Result.Add('cover', '');
   Result.Add('since', DateTimeToUnix(Request.FirstAt));
   Names := TJSONArray.Create;
   for I := 0 to Request.Voters.Count - 1 do
@@ -2425,7 +2439,10 @@ begin
       Now.Add('artist', fNowArtist);
       Now.Add('title', fNowTitle);
       Now.Add('players', fNowPlayers);
-      Now.Add('cover', (Idx >= 0) and (fSongs[Idx].CoverFile <> ''));
+      if Idx >= 0 then
+        Now.Add('cover', CoverTag(fSongs[Idx].Key, fSongs[Idx].CoverFile))
+      else
+        Now.Add('cover', '');
       Now.Add('startedAt', fNowStartedAt);
       Now.Add('offset', fNowOffset);
       Now.Add('duration', fNowDuration);
