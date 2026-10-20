@@ -447,6 +447,9 @@ type
       BackScreen:              PMenu;
 
       function  ExitScreen: PMenu;
+      // what the control under the mouse (or selected) does, at the bottom
+      function  ControlHelp: UTF8String;
+      procedure DrawControlHelp;
 
       constructor Create; override;
       destructor Destroy; override;
@@ -5391,6 +5394,98 @@ begin
   inherited;
 end;
 
+function TScreenEditSub.ControlHelp: UTF8String;
+var
+  Key: string;
+  Num, I: integer;
+begin
+  Result := '';
+  if (Interaction < 0) or (Interaction > High(Interactions)) then
+    Exit;
+  Key := '';
+  Num := Interactions[Interaction].Num;
+  if Interactions[Interaction].Typ = iSelectS then
+  begin
+    if Num = TitleSlideId then Key := 'TITLE'
+    else if Num = ArtistSlideId then Key := 'ARTIST'
+    else if Num = LanguageSlideId then Key := 'LANGUAGE'
+    else if Num = EditionSlideId then Key := 'EDITION'
+    else if Num = GenreSlideId then Key := 'GENRE'
+    else if Num = YearSlideId then Key := 'YEAR'
+    else if Num = CreatorSlideId then Key := 'CREATOR'
+    else if Num = MP3SlideId then Key := 'MP3'
+    else if Num = CoverSlideId then Key := 'COVER'
+    else if Num = BackgroundSlideId then Key := 'BACKGROUND'
+    else if Num = VideoSlideId then Key := 'VIDEO'
+    else if Num = VideoGapSlideId then Key := 'VIDEOGAP'
+    else if Num = BPMSlideId then Key := 'BPM'
+    else if Num = GAPSlideId then Key := 'GAP'
+    else if Num = StartTagSlideId then Key := 'STARTTAG'
+    else if Num = EndTagSlideId then Key := 'ENDTAG'
+    else if Num = MedleyStartSlideId then Key := IfThen(CurrentSong.isDuet, 'DUETNAME', 'MEDLEYSTART')
+    else if Num = MedleyEndSlideId then Key := IfThen(CurrentSong.isDuet, 'DUETNAME', 'MEDLEYEND')
+    else if Num = PreviewStartSlideId then Key := 'PREVIEW'
+    else if Num = RelativeSlideId then Key := 'RELATIVE'
+    else if Num = StartSlideId then Key := 'NOTESTART'
+    else if Num = DurationSlideId then Key := 'NOTEDURATION'
+    else if Num = ToneSlideId then Key := 'NOTETONE'
+    else if Num = LyricSlideId then Key := 'NOTELYRIC'
+    else if Num = VolumeAudioSlideId then Key := 'VOLAUDIO'
+    else if Num = VolumeMidiSlideId then Key := 'VOLMIDI'
+    else if Num = VolumeClickSlideId then Key := 'VOLCLICK';
+  end
+  else if Interactions[Interaction].Typ = iButton then
+  begin
+    if Num = UndoButtonId then Key := 'UNDO'
+    else if Num = PreviousSeqButtonID then Key := 'PREVLINE'
+    else if Num = NextSeqButtonID then Key := 'NEXTLINE'
+    else if Num = FreestyleButtonID then Key := 'FREESTYLE'
+    else if Num = GoldButtonID then Key := 'GOLD'
+    else if Num = PlayOnlyButtonID then Key := 'PLAYLINE'
+    else if Num = PlayWithNoteButtonID then Key := 'PLAYWITHNOTES'
+    else if Num = PlayNoteButtonID then Key := 'PLAYNOTES'
+    else if Num = TextSentence then Key := 'CURRENTLINE'
+    else if Num = TextNote then Key := 'CURRENTNOTE';
+  end;
+  if Key = '' then
+  begin
+    for I := 0 to High(InteractiveNoteId) do
+      if Interaction = InteractiveNoteId[I] then
+        Key := 'NOTE';
+    for I := 0 to High(InteractiveLineId) do
+      if Interaction = InteractiveLineId[I] then
+        Key := 'LINE';
+  end;
+  if Key <> '' then
+    Result := Language.Translate('EDIT_TIP_' + Key);
+end;
+
+procedure TScreenEditSub.DrawControlHelp;
+const
+  BAR_Y = 576;
+  BAR_H = 20;
+var
+  Help: UTF8String;
+  Size: real;
+begin
+  Help := ControlHelp;
+  if Help = '' then
+    Exit;
+  Renderer.DrawQuad(0, BAR_Y, 0, RenderW, BAR_H, 0, 0, 0, 0.6);
+  ResetFont();
+  Size := 16;
+  SetFontSize(Size);
+  // long texts get smaller to fit the width
+  while (TextWidth(Help) > RenderW - 20) and (Size > 10) do
+  begin
+    Size := Size - 1;
+    SetFontSize(Size);
+  end;
+  SetFontColor(1, 1, 1, 1);
+  SetFontPos(10, BAR_Y + (BAR_H - Size) / 2 - 1);
+  PrintText(Help);
+end;
+
 function TScreenEditSub.ExitScreen: PMenu;
 begin
   if BackScreen <> nil then
@@ -6222,6 +6317,7 @@ begin
     fCurrentVideo.Draw;
   end;
 
+  DrawControlHelp;
   Result := true;
 end;
 
