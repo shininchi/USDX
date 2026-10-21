@@ -5899,8 +5899,9 @@ begin
     MoveNote := false;
     //show transparent background for notes
     ShowInteractiveBackground;
-    // user input tracking
-    AudioInput.CaptureStart;
+    // no microphone capture here: showing the sung tone is not worth it,
+    // and opening a Bluetooth headset's microphone switches the headset to
+    // call mode, reconfiguring the device the song plays through
   end;
 
   // background picture
