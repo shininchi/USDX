@@ -247,6 +247,9 @@ def shorten_long_syllables(notes, beat_seconds):
     return result
 
 
+BREAK_AFTER_SECONDS = 2.0  # where a line break goes after the line's end
+
+
 def break_cost(prev_text, next_text, pause, in_exclamation):
     """Cost of a line break between two words; negative = a good place."""
     cost = -4.0 * min(pause, 2.0)
@@ -410,8 +413,10 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None):
         if i < len(lines) - 1:
             last = line[-1][-1]
             following = lines[i + 1][0][0]
-            # the next line shows up halfway through the pause
-            out.append("- %d" % (last.end + max(0, following.start - last.end) // 2))
+            # the next line shows up 2 s after this one ends, as in most
+            # songs, or halfway through a shorter pause
+            pause = max(0, following.start - last.end)
+            out.append("- %d" % (last.end + min(pause // 2, round(BREAK_AFTER_SECONDS / beat_seconds))))
     out.append("E")
     return out
 

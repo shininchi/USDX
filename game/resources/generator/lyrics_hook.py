@@ -297,37 +297,49 @@ def lyric_segments(lines, segments, audio_seconds=None):
     return result
 
 
-def voiced_frames(audio):
-    """For each 10 ms of the (16 kHz) vocals, whether the voice sounds."""
+VOICE_DB = -40  # below this (against the loudest moment) the voice is silent
+TAIL_DB = 20    # a syllable ends this far below its own peak: echo, reverb
+
+
+def vocal_levels(audio):
+    """Level in dB (0 = the loudest) of each 10 ms of the (16 kHz) vocals."""
     try:
         import librosa
         import numpy as np
         rms = librosa.feature.rms(y=np.asarray(audio, dtype=np.float32), frame_length=640, hop_length=160)[0]
-        return list(librosa.amplitude_to_db(rms, ref=np.max) > -40)
+        return list(librosa.amplitude_to_db(rms, ref=np.max))
     except Exception as e:  # aligning still works without it
         print("[lyrics] no vocal activity: %s" % e, flush=True)
         return []
 
 
-def trim_line_edges(aligned, voiced):
+def trim_line_edges(aligned, levels):
     """The aligner gives the first word of a line the silence before it
     and stretches the last one to the end of its window, over the start of
     the next line (which UltraSinger then pushes later, word after word):
-    they are cut to where the voice sounds."""
-    def sounds(t):
+    they are cut to where the voice sounds. An effect on the voice (echo,
+    reverb) sounds on long after the singing: the last word also ends where
+    it fades well below its own peak, which a held note does not."""
+    def level(t):
         f = int(t * 100)
-        return 0 <= f < len(voiced) and voiced[f]
+        return levels[f] if 0 <= f < len(levels) else VOICE_DB - 1
+
+    def sounds(t):
+        return level(t) > VOICE_DB
     lines = [[w for w in seg.get("words", []) if "start" in w and "end" in w] for seg in aligned]
     lines = [words for words in lines if words]
     for n, words in enumerate(lines):
         first, last = words[0], words[-1]
-        if voiced:
+        if levels:
             t = first["start"]
             while t < first["end"] - 0.1 and not (sounds(t) and sounds(t + 0.01) and sounds(t + 0.02)):
                 t += 0.01
             first["start"] = round(t, 3)
             t = last["end"]
             while t > last["start"] + 0.1 and not sounds(t):
+                t -= 0.01
+            peak = max(level(last["start"] + k / 100.0) for k in range(int((t - last["start"]) * 100) + 1))
+            while t > last["start"] + 0.1 and level(t) < peak - TAIL_DB:
                 t -= 0.01
             last["end"] = round(t + 0.01, 3)
         if n + 1 < len(lines):
@@ -350,7 +362,7 @@ def install(lyrics_path):
             placed = fitted and timed_segments(fitted, seconds)
             if placed:
                 result = original_align(placed, model, metadata, audio, *args, **kwargs)
-                trim_line_edges(result.get("segments", []), voiced_frames(audio))
+                trim_line_edges(result.get("segments", []), vocal_levels(audio))
                 return result
             segments = lyric_segments(lines, segments, seconds)
         return original_align(segments, model, metadata, audio, *args, **kwargs)
