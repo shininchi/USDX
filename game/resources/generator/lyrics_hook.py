@@ -1,6 +1,6 @@
 """Runs UltraSinger with known lyrics instead of the ones Whisper hears.
 
-Usage: python lyrics_hook.py LYRICS_FILE UltraSinger.py [UltraSinger options]
+Usage: python lyrics_hook.py LYRICS_FILE|- UltraSinger.py [UltraSinger options]
 
 Whisper mishears sung words ("gala bombonera" for "La Rosaleda"). When the
 real lyrics are known, whisperx aligns them instead, each line inside a
@@ -394,12 +394,29 @@ def keep_words_in_silence():
     silence_processing.remove_silence_from_transcription_data = remove_silence
 
 
+def skip_musicbrainz():
+    """UltraSinger looks the song up on MusicBrainz and asks the Cover Art
+    Archive for the cover of every release found, which takes minutes;
+    for a file, its own tags and cover are used instead (usdx_generate),
+    so the song is taken as not found there."""
+    from modules import musicbrainz_client
+
+    def not_searched(title, artist):
+        return musicbrainz_client.SongInfo(title=title, artist=artist or "Unknown Artist")
+
+    musicbrainz_client.search_musicbrainz = not_searched
+
+
 def main():
+    # "-" for no lyrics: UltraSinger then works as usual
     lyrics_path, script = sys.argv[1], sys.argv[2]
-    install(lyrics_path)
     sys.argv = [script] + sys.argv[3:]
     sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
-    keep_words_in_silence()
+    if lyrics_path != "-":
+        install(lyrics_path)
+        keep_words_in_silence()
+    if os.environ.get("USDX_SKIP_MUSICBRAINZ"):
+        skip_musicbrainz()
     runpy.run_path(script, run_name="__main__")
 
 

@@ -273,10 +273,9 @@ def run_ultrasinger(args, out_dir, language, lyrics):
     global PLACED_BY
     PLACED_BY = "Whisper"
     script = os.path.join(args.ultrasinger, "src", "UltraSinger.py")
-    hook = []
     if lyrics:
         print("Using the lyrics in " + lyrics, flush=True)
-        hook = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "lyrics_hook.py"), lyrics]
+    hook = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "lyrics_hook.py"), lyrics or "-"]
     cmd = [sys.executable, "-u", "-B"] + hook + [script,
            "-i", audio_only(args.input, out_dir, args.ffmpeg), "-o", out_dir,
            "--format_version", "1.0.0",
@@ -290,6 +289,9 @@ def run_ultrasinger(args, out_dir, language, lyrics):
     if args.ffmpeg:
         cmd += ["--ffmpeg", args.ffmpeg]
     env = dict(os.environ, PYTHONUNBUFFERED="1")
+    if os.path.isfile(args.input):
+        # its tags and cover are used, not what MusicBrainz says (minutes)
+        env["USDX_SKIP_MUSICBRAINZ"] = "1"
     # ffmpeg must be on the PATH for the libraries that do not take a path
     if args.ffmpeg:
         env["PATH"] = args.ffmpeg + os.pathsep + env.get("PATH", "")
