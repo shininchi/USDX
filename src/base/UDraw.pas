@@ -547,6 +547,78 @@ begin
 end;
 
 // draw blank Notebars
+const
+  LONG_PAUSE_SECONDS = 8;    // a pause this long shows the time left instead of notes
+  PAUSE_REVEAL_BEATS = 40;   // the lyric helper bar moves these last beats (BarMoveLimit)
+  PAUSE_REVEAL_SECONDS = 2;  // and blinks this long before, with notes and lyrics back
+
+function BeatsToSeconds(Beats: real): real;
+begin
+  Result := Beats * 60 / CurrentSong.BPM;
+end;
+
+// seconds left in a long pause of the track before its notes and lyrics
+// show again (shortly before the bar moves to the next line), 0 when
+// it is not in one: the video is seen clean during instrumentals
+function PauseLeft(Track: integer): real;
+var
+  Line: PLine;
+  NextBeat, PrevEnd: real;
+begin
+  Result := 0;
+  if (ScreenSong.Mode = smMedley) or ScreenSing.CountIn or (CurrentSong.BPM <= 0) then
+    Exit;
+  if (Track < 0) or (Track > System.High(CurrentSong.Tracks)) then
+    Exit;
+  with CurrentSong.Tracks[Track] do
+  begin
+    if (CurrentLine < 0) or (CurrentLine > System.High(Lines)) or (Length(Lines[CurrentLine].Notes) = 0) then
+      Exit;
+    Line := @Lines[CurrentLine];
+    if LyricsState.MidBeat < Line.Notes[0].StartBeat then
+    begin
+      // the line is up, its first note still to come
+      NextBeat := Line.Notes[0].StartBeat;
+      if (CurrentLine > 0) and (Length(Lines[CurrentLine - 1].Notes) > 0) then
+        with Lines[CurrentLine - 1] do
+          PrevEnd := Notes[System.High(Notes)].StartBeat + Notes[System.High(Notes)].Duration
+      else
+        // the intro: from the start of the song
+        PrevEnd := -(CurrentSong.GAP / 1000) * CurrentSong.BPM / 60;
+    end
+    else
+    begin
+      // the line is sung, and the next one is far
+      PrevEnd := Line.Notes[System.High(Line.Notes)].StartBeat + Line.Notes[System.High(Line.Notes)].Duration;
+      if (LyricsState.MidBeat < PrevEnd) or (CurrentLine >= System.High(Lines)) or
+         (Length(Lines[CurrentLine + 1].Notes) = 0) then
+        Exit;
+      NextBeat := Lines[CurrentLine + 1].Notes[0].StartBeat;
+    end;
+  end;
+  if BeatsToSeconds(NextBeat - PrevEnd) < LONG_PAUSE_SECONDS then
+    Exit;
+  Result := Max(0, BeatsToSeconds(NextBeat - LyricsState.MidBeat) -
+                   BeatsToSeconds(PAUSE_REVEAL_BEATS) - PAUSE_REVEAL_SECONDS);
+end;
+
+// the time left in a pause, where the lyrics go
+procedure SingDrawPauseLeft(Seconds: real; LyricsMid, Top, Height: real);
+var
+  Text: UTF8String;
+  Total: integer;
+begin
+  Total := Ceil(Seconds);
+  Text := Format('%d:%.2d', [Total div 60, Total mod 60]);
+  SetFontFamily(0);
+  SetFontStyle(ftBoldHighRes);
+  SetFontItalic(false);
+  SetFontSize(Height * 0.7);
+  SetFontColor(1, 1, 1, 0.85);
+  SetFontPos(LyricsMid - TextWidth(Text) / 2, Top + Height * 0.1);
+  PrintText(Text);
+end;
+
 procedure SingDrawLine(Left, Top, Right: real; Track, PlayerIndex: integer; LineSpacing: integer);
 var
   Rec:   TRecR;
@@ -557,6 +629,8 @@ var
   ColorR, ColorG, ColorB, A: single;
   GoldenStarPos: real;
 begin
+  if PauseLeft(Track) > 0 then
+    Exit;
   if (ScreenSing.settings.NotesVisible[Track]) then
   begin
     // the textures start counting at 1, but everything else just starts at 0
@@ -715,6 +789,8 @@ var
 //  R, G, B, A: real;
   NotesH2:    real;
 begin
+  if PauseLeft(Track) > 0 then
+    Exit;
   if (ScreenSing.Settings.InputVisible) then
   begin
     //Log.LogStatus('Player notes', 'SingDraw');
@@ -854,6 +930,8 @@ var
   A:          single;
   Texture:        TTexture;
 begin
+  if PauseLeft(Track) > 0 then
+    Exit;
   if (ScreenSing.settings.NotesVisible[PlayerIndex]) then
   begin
     A := sqrt((1 + sin(AudioPlayback.Position * 3)))/2 + 0.05;
@@ -1192,7 +1270,13 @@ end;
 procedure SingDrawLines;
 var
   NR: TRecR;         // lyrics area bounds (NR = NoteRec?)
+  T: integer;
 begin
+  T := 0;
+  while (T <= High(CurrentSong.Tracks)) and (PauseLeft(T) > 0) do
+    Inc(T);
+  if T > High(CurrentSong.Tracks) then
+    Exit;
   // positions
   NR.Left := 20;
   NR.Right := 780;
@@ -1335,12 +1419,24 @@ begin
   begin
     if (CurrentSong.isDuet) and (PlayersPlay <> 1) then
     begin
-      LyricEngineDuetP1.Draw(LyricsState.MidBeat);
-      SingDrawLyricHelper(0, NR.Left, NR.WMid);
+      if PauseLeft(0) > 0 then
+        SingDrawPauseLeft(PauseLeft(0), NR.Mid, Theme.LyricBarDuetP1.UpperY, Theme.LyricBarDuetP1.UpperH)
+      else
+      begin
+        LyricEngineDuetP1.Draw(LyricsState.MidBeat);
+        SingDrawLyricHelper(0, NR.Left, NR.WMid);
+      end;
 
-      LyricEngineDuetP2.Draw(LyricsState.MidBeat);
-      SingDrawLyricHelper(1, NR.Left, NR.WMid);
+      if PauseLeft(1) > 0 then
+        SingDrawPauseLeft(PauseLeft(1), NR.Mid, Theme.LyricBarDuetP2.UpperY, Theme.LyricBarDuetP2.UpperH)
+      else
+      begin
+        LyricEngineDuetP2.Draw(LyricsState.MidBeat);
+        SingDrawLyricHelper(1, NR.Left, NR.WMid);
+      end;
     end
+    else if PauseLeft(0) > 0 then
+      SingDrawPauseLeft(PauseLeft(0), NR.Mid, Theme.LyricBar.UpperY, Theme.LyricBar.UpperH)
     else
     begin
       LyricEngine.Draw(LyricsState.MidBeat);
