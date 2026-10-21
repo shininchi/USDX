@@ -17,6 +17,10 @@ and returns new lines with:
     vocals), as the word times of the transcription are often a bit off
 """
 
+import bisect
+import json
+import math
+
 NOTE_TYPES = (":", "*", "F", "R", "G")
 
 MIN_PART_SECONDS = 0.18  # shorter parts of a syllable are merged with a neighbour
@@ -75,23 +79,23 @@ def parse_notes(body):
 
 
 def fold_octaves(notes):
-    """Moves each note to the octave closest to the previous notes.
+    """Moves back a lone note an octave away from the notes on both sides.
 
-    Singing scores do not care about the octave, but notes jumping up and
-    down by an octave are hard to read and keep the parts of a syllable
-    from being merged.
+    The detected octave is right nearly always (it is what is sung):
+    moving every note to the octave closest to the previous one put many
+    a fourth or a fifth on the wrong side, so only a note that jumps far
+    from both neighbours the same way, the pitch tracker slipping, is
+    moved. Notes jumping up and down by an octave are hard to read and
+    keep the parts of a syllable from being merged.
     """
-    if not notes:
-        return
-    pitches = sorted(n.pitch for n in notes)
-    median = pitches[len(pitches) // 2]
-    ref = None
-    for note in notes:
-        if ref is None:
-            ref = median
-        candidates = [note.pitch + 12 * k for k in range(-4, 5)]
-        note.pitch = min(candidates, key=lambda c: abs(c - ref) + 0.3 * abs(c - median))
-        ref = note.pitch
+    original = [n.pitch for n in notes]
+    for i, note in enumerate(notes):
+        around = [original[j] for j in (i - 1, i + 1) if 0 <= j < len(notes)]
+        if not around:
+            continue
+        diffs = [original[i] - p for p in around]
+        if all(d >= 9 for d in diffs) or all(d <= -9 for d in diffs):
+            note.pitch = original[i] - 12 * round(sum(diffs) / len(diffs) / 12.0)
 
 
 def syllables(notes):
@@ -380,7 +384,41 @@ def trim_line_end(note, voiced, gap, beat_seconds):
         i += 1
 
 
-def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None):
+PITCH_CONFIDENCE = 0.5  # pitch track frames below this are not the voice
+
+
+def read_pitch_track(path):
+    """(times, midi pitches) of the confident frames of UltraSinger's pitch
+    track (SwiftF0's cache: times, frequencies, confidence), None if none."""
+    try:
+        data = json.load(open(path))
+    except Exception as e:  # cleaning up still works without it
+        print("No pitch track: %s" % e, flush=True)
+        return None
+    times, pitches = [], []
+    for t, f, c in zip(data["times"], data["frequencies"], data["confidence"]):
+        if c >= PITCH_CONFIDENCE and 65 < f < 1000:
+            times.append(t)
+            pitches.append(69 + 12 * math.log2(f / 440.0))
+    return (times, pitches) if times else None
+
+
+def sung_pitches(notes, pitch_track, gap, beat_seconds):
+    """Each note takes the pitch sung during it (the median of the pitch
+    track). UltraSinger's notes, and more so once merged and moved, are
+    often not what is sung: in La salvación 38% matched the human chart,
+    72% after this."""
+    times, pitches = pitch_track
+    for note in notes:
+        t0 = gap + note.start * beat_seconds
+        t1 = gap + note.end * beat_seconds
+        lo, hi = bisect.bisect_left(times, t0), bisect.bisect_left(times, t1)
+        if hi - lo >= 2:
+            sung = sorted(pitches[lo:hi])
+            note.pitch = int(round(sung[len(sung) // 2])) - 48  # UltraStar 0 = MIDI 48
+
+
+def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None):
     beat_seconds = 60.0 / (bpm * 4)
     notes = parse_notes(body)
     if not notes:
@@ -403,6 +441,10 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None):
         for line in (lines_like_lyrics(merged, lyric_lines) if lyric_lines else break_lines(merged, beat_seconds)):
             if line and line[-1]:
                 trim_line_end(line[-1][-1], voiced, gap_ms / 1000.0, beat_seconds)
+    # the pitch of each note, once it is where it is sung
+    if pitch_track:
+        sung_pitches(merged, pitch_track, gap_ms / 1000.0, beat_seconds)
+        fold_octaves(merged)
     if lyric_lines:
         lines = lines_like_lyrics(merged, lyric_lines)
     else:

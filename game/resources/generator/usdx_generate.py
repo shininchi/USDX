@@ -352,6 +352,15 @@ def tag_value(header, tag, default=0.0):
     return default
 
 
+def pitch_track_file(folder):
+    """UltraSinger's cached pitch track (SwiftF0) of the song, or None."""
+    for root, _dirs, files in os.walk(folder):
+        for name in files:
+            if name.startswith("swiftf0") and name.endswith(".json"):
+                return os.path.join(root, name)
+    return None
+
+
 def clean_up_song(txt, vocals, lyrics=None):
     """Rewrites UltraSinger's notes with song_cleanup."""
     header, body = split_song(read_text(txt))
@@ -365,7 +374,9 @@ def clean_up_song(txt, vocals, lyrics=None):
         import lyrics_hook
         lyric_lines = lyrics_hook.read_lyrics(lyrics)
     voiced = song_cleanup.vocal_activity(vocals) if vocals else []
-    body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines, voiced)
+    track = pitch_track_file(os.path.dirname(txt))
+    pitch_track = song_cleanup.read_pitch_track(track) if track else None
+    body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines, voiced, pitch_track)
     with open(txt, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(header + body) + "\n")
 
