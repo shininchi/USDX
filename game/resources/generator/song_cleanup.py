@@ -384,6 +384,48 @@ def trim_line_end(note, voiced, gap, beat_seconds):
         i += 1
 
 
+def fit_line_end(notes, voiced, gap, beat_seconds):
+    """The last syllables of a line that fall after the voice stops (a long
+    word split into syllables without looking at the sound) are moved into
+    the voice, with the ones before them."""
+    if not voiced or len(notes) < 2:
+        return
+    frame = 0.01
+    first = int((gap + notes[0].start * beat_seconds) / frame)
+    last = min(len(voiced), int((gap + notes[-1].end * beat_seconds) / frame))
+    voice_end = None
+    for i in range(last - 1, first - 1, -1):
+        if voiced[i]:
+            voice_end = (i + 1) * frame
+            break
+    if voice_end is None:
+        return
+    k = next((i for i, n in enumerate(notes) if gap + n.start * beat_seconds >= voice_end - 0.02), None)
+    if not k:  # none in silence, or all of them
+        return
+    # the syllables from the last one with voice on are squeezed into what
+    # is left of it, keeping their proportions; earlier ones join in until
+    # none is shorter than MIN_FITTED_SECONDS
+    end_beat = int(round((voice_end - gap) / beat_seconds))
+    j = k - 1
+    while True:
+        begin = notes[j].start
+        scale = (end_beat - begin) / float(max(1, notes[-1].end - begin))
+        shortest = min(n.length for n in notes[j:]) * scale * beat_seconds
+        if shortest >= MIN_FITTED_SECONDS or j == 0:
+            break
+        j -= 1
+    if end_beat - begin < len(notes) - j:
+        return
+    starts = [begin + int(round((n.start - begin) * scale)) for n in notes[j:]] + [end_beat]
+    for i, note in enumerate(notes[j:]):
+        note.start = max(starts[i], notes[j + i - 1].end if i else starts[i])
+        note.length = max(1, starts[i + 1] - note.start)
+
+
+MIN_FITTED_SECONDS = 0.1  # syllables fitted into the end of the voice
+
+
 PITCH_CONFIDENCE = 0.5  # pitch track frames below this are not the voice
 
 
@@ -440,6 +482,7 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
     if voiced:
         for line in (lines_like_lyrics(merged, lyric_lines) if lyric_lines else break_lines(merged, beat_seconds)):
             if line and line[-1]:
+                fit_line_end([n for word in line for n in word], voiced, gap_ms / 1000.0, beat_seconds)
                 trim_line_end(line[-1][-1], voiced, gap_ms / 1000.0, beat_seconds)
     # the pitch of each note, once it is where it is sung
     if pitch_track:
