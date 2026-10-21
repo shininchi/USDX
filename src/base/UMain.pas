@@ -68,6 +68,7 @@ procedure MainThreadExec(Proc: TMainThreadExecProc; Data: Pointer);
 implementation
 
 uses
+  Classes,
   math,
   UCommandLine,
   UCommon,
@@ -110,6 +111,56 @@ uses
   UTime,
   UWebcam;
   //UVideoAcinerella;
+
+var
+  CrashLogFile:   string = '';
+  PrevExceptProc: TExceptProc = nil;
+
+// a crash leaves its stack in Crash.log: errors in other threads (audio,
+// web server) end the game without a word, and the main loop's report
+// only shows in a dialog
+procedure WriteCrashLog(const Report: string);
+var
+  F: TextFile;
+begin
+  if CrashLogFile = '' then
+    Exit;
+  try
+    AssignFile(F, CrashLogFile);
+    if FileExists(CrashLogFile) then
+      Append(F)
+    else
+      Rewrite(F);
+    WriteLn(F, '==== ', FormatDateTime('yyyy-mm-dd hh:nn:ss', Now), ' ', USDXVersionStr);
+    WriteLn(F, Report);
+    CloseFile(F);
+  except
+  end;
+end;
+
+procedure LogUnhandledException(Obj: TObject; Addr: CodePointer; FrameCount: Longint; Frames: PCodePointer);
+var
+  Report: string;
+  I: Longint;
+begin
+  if GetCurrentThreadId = MainThreadID then
+    Report := 'Unhandled error in the main thread' + LineEnding
+  else
+    Report := 'Unhandled error in another thread' + LineEnding;
+  if Obj is Exception then
+    Report := Report + Exception(Obj).ClassName + ': ' + Exception(Obj).Message + LineEnding
+  else if Obj <> nil then
+    Report := Report + Obj.ClassName + LineEnding;
+  // with the place of Main in memory and in the binary (nm), atos turns
+  // these addresses into files and lines
+  Report := Report + Format('Main at $%x', [PtrUInt(@Main)]) + LineEnding;
+  Report := Report + BackTraceStrFunc(Addr);
+  for I := 0 to FrameCount - 1 do
+    Report := Report + LineEnding + BackTraceStrFunc(Frames[I]);
+  WriteCrashLog(Report);
+  if Assigned(PrevExceptProc) then
+    PrevExceptProc(Obj, Addr, FrameCount, Frames);
+end;
 
 procedure Main;
 var
@@ -161,6 +212,9 @@ begin
     // Language
     Log.LogStatus('Initialize Paths', 'Initialization');
     InitializePaths;
+    CrashLogFile := LogPath.Append('Crash.log').ToNative;
+    PrevExceptProc := ExceptProc;
+    ExceptProc := @LogUnhandledException;
     Log.SetLogFileLevel(50);
     Log.LogStatus('Load Language', 'Initialization');
     Language := TLanguage.Create;
@@ -381,6 +435,7 @@ begin
           Report := Report + BackTraceFunction(ExceptAddr);
           for I := 0 to ExceptFrameCount - 1 do
             Report := Report + LineEnding + BackTraceFunction(ExceptFrames[I]);
+          WriteCrashLog(Report);
           ShowMessage(Report);
           done := true;
         end
