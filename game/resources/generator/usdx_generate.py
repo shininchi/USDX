@@ -65,8 +65,9 @@ LANGUAGE_CODES = {
 
 CHILD = None
 
-# new songs say in their title which generator made them and what placed
-# their lines ("La salvación [A Whisper]"), to compare the two generators:
+# new songs say in their title which generator made them, what placed
+# their lines and where the lyrics came from ("La salvación [A Whisper ·
+# letra LRCLIB]", also in #COMMENT), to compare the two generators:
 # A places the lines where Whisper hears them, B by LRCLIB's synced times
 VARIANT = "B"
 PLACED_BY = "Whisper"
@@ -399,6 +400,37 @@ def name_from_file(path, ffmpeg_dir=None):
     return (artist, title) if artist and title else None
 
 
+def lyrics_origin(source, lyrics):
+    """(short, long) saying where the lyrics came from, for the title and
+    the comment of the song."""
+    if source == "lrclib":
+        synced = any(re.match(r"\[\d+:\d", l) for l in read_text(lyrics).splitlines())
+        return ("letra LRCLIB sinc", "letra de LRCLIB, sincronizada") if synced else \
+               ("letra LRCLIB", "letra de LRCLIB, sin tiempos")
+    if source == "user":
+        return "letra propia", "letra de letra.txt"
+    return "letra Whisper", "letra oída por Whisper"
+
+
+COMMENT_PREFIX = "Generada con "
+
+
+def set_origin_comment(txt, source, lyrics):
+    """Says in the song's #COMMENT which generator made it, where the
+    lyrics came from and what placed the lines; a comment of someone
+    else's is kept."""
+    header, body = split_song(read_text(txt))
+    old = [l for l in header if tag_of(l) == "COMMENT"]
+    if old and old[0].split(":", 1)[1].strip() and \
+            not old[0].split(":", 1)[1].strip().startswith((COMMENT_PREFIX, "UltraSinger")):
+        return
+    comment = "#COMMENT:%s%s: %s; líneas colocadas por %s" % (
+        COMMENT_PREFIX, VARIANT, lyrics_origin(source, lyrics)[1], PLACED_BY)
+    header = [l for l in header if tag_of(l) != "COMMENT"] + [comment]
+    with open(txt, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(header + body) + "\n")
+
+
 def artist_title(txt):
     """(artist, title) of a song file, None if it lacks them."""
     tags = {tag_of(l): l.split(":", 1)[1].strip() for l in split_song(read_text(txt))[0] if ":" in l}
@@ -646,7 +678,8 @@ def main():
             if not names:
                 names = artist_title(txt)
             if names:
-                names = (names[0], "%s [%s %s]" % (names[1], VARIANT, PLACED_BY))
+                names = (names[0], "%s [%s %s · %s]" % (names[1], VARIANT, PLACED_BY,
+                                                       lyrics_origin(source, lyrics)[0]))
                 set_artist_title(txt, *names)
                 txt = rename_song_files(txt, *names)
                 folder_name = os.path.splitext(os.path.basename(txt))[0]
@@ -663,6 +696,7 @@ def main():
             with open(os.path.join(os.path.dirname(result), LYRICS_FILES[0]), "w",
                       encoding="utf-8", newline="\n") as f:
                 f.write("\n".join(plain_lyrics(lyrics)) + "\n")
+        set_origin_comment(result, source, lyrics)
         write_heard_lyrics(result, find_file(work, "vocals.wav"))
         say("@@DONE " + result)
     except KeyboardInterrupt:
