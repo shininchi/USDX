@@ -299,6 +299,44 @@ def lyric_segments(lines, segments, audio_seconds=None):
 
 VOICE_DB = -40  # below this (against the loudest moment) the voice is silent
 TAIL_DB = 20    # a syllable ends this far below its own peak: echo, reverb
+LEAP_SEMITONES = 9  # a held word that ends this far from its own pitch...
+LEAP_SECONDS = 0.3  # ...for this long is an instrument left in the vocals
+
+
+def pitch_leap(audio, start, end):
+    """Where the last word of a line stops being the singer: it ends on a
+    steady pitch far from the one it was sung at (an instrument left in the
+    separated vocals, held on after the voice). None if not."""
+    if audio is None or end - start < 2 * LEAP_SECONDS + 0.3:
+        return None
+    try:
+        import librosa
+        import numpy as np
+        y = np.asarray(audio[int(start * 16000):int(end * 16000)], dtype=np.float32)
+        f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=16000, frame_length=1024, hop_length=160)
+    except Exception as e:  # aligning still works without it
+        print("[lyrics] no pitch: %s" % e, flush=True)
+        return None
+    semis = 12 * np.log2(np.where(voiced, f0, np.nan) / 440.0)
+    sung = semis[:30][~np.isnan(semis[:30])]  # the first 0.3 s
+    tail = semis[~np.isnan(semis)][-30:]  # the last 0.3 s with a pitch
+    if len(sung) < 10 or len(tail) < 10:
+        return None
+    held = np.median(tail)
+    if abs(held - np.median(sung)) <= LEAP_SEMITONES:
+        return None
+    # back from the end while the sound holds that steady pitch (an
+    # instrument; a voice wobbles, and the pitch tracker slips octaves)
+    k = len(semis)
+    while k > 0:
+        chunk = semis[max(0, k - 10):k]  # 0.1 s at a time: stray frames do not stop it
+        pitched = chunk[~np.isnan(chunk)]
+        if len(pitched) and np.count_nonzero(np.abs(pitched - held) <= 1.0) < 0.5 * len(pitched):
+            break
+        k = max(0, k - 10)
+    if k <= 30 or np.count_nonzero(~np.isnan(semis[k:])) < LEAP_SECONDS * 100:
+        return None
+    return start + k / 100.0
 
 
 def vocal_levels(audio):
@@ -313,7 +351,7 @@ def vocal_levels(audio):
         return []
 
 
-def trim_line_edges(aligned, levels):
+def trim_line_edges(aligned, levels, audio=None):
     """The aligner gives the first word of a line the silence before it
     and stretches the last one to the end of its window, over the start of
     the next line (which UltraSinger then pushes later, word after word):
@@ -341,6 +379,9 @@ def trim_line_edges(aligned, levels):
             peak = max(level(last["start"] + k / 100.0) for k in range(int((t - last["start"]) * 100) + 1))
             while t > last["start"] + 0.1 and level(t) < peak - TAIL_DB:
                 t -= 0.01
+            leap = pitch_leap(audio, last["start"], t + 0.01)
+            if leap is not None:
+                t = leap - 0.01
             last["end"] = round(t + 0.01, 3)
         if n + 1 < len(lines):
             next_start = lines[n + 1][0]["start"]
@@ -362,7 +403,7 @@ def install(lyrics_path):
             placed = fitted and timed_segments(fitted, seconds)
             if placed:
                 result = original_align(placed, model, metadata, audio, *args, **kwargs)
-                trim_line_edges(result.get("segments", []), vocal_levels(audio))
+                trim_line_edges(result.get("segments", []), vocal_levels(audio), audio)
                 return result
             segments = lyric_segments(lines, segments, seconds)
         return original_align(segments, model, metadata, audio, *args, **kwargs)
