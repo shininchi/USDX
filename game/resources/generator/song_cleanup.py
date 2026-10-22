@@ -427,37 +427,129 @@ MIN_FITTED_SECONDS = 0.1  # syllables fitted into the end of the voice
 
 
 PITCH_CONFIDENCE = 0.5  # pitch track frames below this are not the voice
+PITCH_FRAME = 0.01      # seconds per frame of a pitch track
+MIN_STEADY_SECONDS = 0.12  # a steady pitch this long inside a note is a note of its own
+
+# Krumhansl's key profiles, to find the key of the song
+KEY_MAJOR = (6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
+KEY_MINOR = (6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
+
+
+def vocal_pitch(vocals_wav):
+    """The sung pitch (MIDI, NaN where none) of each 10 ms of the separated
+    vocals, by pyin: against human charts it got more notes right than
+    UltraSinger's own pitch track. None if it cannot be had."""
+    try:
+        import librosa
+        import numpy as np
+        y, _ = librosa.load(vocals_wav, sr=16000, mono=True)
+        f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=16000, frame_length=1024, hop_length=160)
+        return librosa.hz_to_midi(np.where(voiced, f0, np.nan))
+    except Exception as e:  # UltraSinger's track is used instead
+        print("No vocal pitch: %s" % e, flush=True)
+        return None
 
 
 def read_pitch_track(path):
-    """(times, midi pitches) of the confident frames of UltraSinger's pitch
-    track (SwiftF0's cache: times, frequencies, confidence), None if none."""
+    """UltraSinger's pitch track (SwiftF0's cache: times, frequencies,
+    confidence) as a vocal_pitch() one, None if it cannot be read."""
     try:
+        import numpy as np
         data = json.load(open(path))
+        times = np.array(data["times"])
+        freqs = np.array(data["frequencies"])
+        conf = np.array(data["confidence"])
     except Exception as e:  # cleaning up still works without it
         print("No pitch track: %s" % e, flush=True)
         return None
-    times, pitches = [], []
-    for t, f, c in zip(data["times"], data["frequencies"], data["confidence"]):
-        if c >= PITCH_CONFIDENCE and 65 < f < 1000:
-            times.append(t)
-            pitches.append(69 + 12 * math.log2(f / 440.0))
-    return (times, pitches) if times else None
+    frames = np.arange(int(times[-1] / PITCH_FRAME) + 1) * PITCH_FRAME
+    k = np.clip(np.searchsorted(times, frames), 0, len(times) - 1)
+    good = (conf[k] >= PITCH_CONFIDENCE) & (freqs[k] > 65) & (freqs[k] < 1000)
+    track = np.full(len(frames), np.nan)
+    track[good] = 69 + 12 * np.log2(freqs[k][good] / 440.0)
+    return track
 
 
-def sung_pitches(notes, pitch_track, gap, beat_seconds):
-    """Each note takes the pitch sung during it (the median of the pitch
-    track). UltraSinger's notes, and more so once merged and moved, are
-    often not what is sung: in La salvación 38% matched the human chart,
-    72% after this."""
-    times, pitches = pitch_track
-    for note in notes:
-        t0 = gap + note.start * beat_seconds
-        t1 = gap + note.end * beat_seconds
-        lo, hi = bisect.bisect_left(times, t0), bisect.bisect_left(times, t1)
-        if hi - lo >= 2:
-            sung = sorted(pitches[lo:hi])
-            note.pitch = int(round(sung[len(sung) // 2])) - 48  # UltraStar 0 = MIDI 48
+def song_scale(track):
+    """Pitch classes of the key the song is sung in (major or minor)."""
+    import numpy as np
+    sung = track[~np.isnan(track)]
+    if len(sung) < 100:
+        return None
+    hist = np.bincount(np.mod(np.round(sung), 12).astype(int), minlength=12)
+    _, key, minor = max((np.corrcoef(np.roll(profile, k), hist)[0, 1], k, minor)
+                        for k in range(12) for profile, minor in ((KEY_MAJOR, False), (KEY_MINOR, True)))
+    steps = (0, 2, 3, 5, 7, 8, 10) if minor else (0, 2, 4, 5, 7, 9, 11)
+    return set((key + s) % 12 for s in steps)
+
+
+def in_key(pitch, scale):
+    """The semitone for a sung pitch: the nearest one in the key when the
+    nearest of all is out of it (a voice between two notes)."""
+    nearest = int(round(pitch))
+    if not scale or nearest % 12 in scale:
+        return nearest
+    around = [c for c in (int(math.floor(pitch)), int(math.ceil(pitch))) if c % 12 in scale]
+    return min(around, key=lambda c: abs(c - pitch)) if around else nearest
+
+
+def steady_runs(semitones, min_frames):
+    """[start, end, semitone] of the stretches of one semitone at least
+    min_frames long, next ones of the same semitone joined."""
+    runs, k = [], 0
+    while k < len(semitones):
+        j = k
+        while j < len(semitones) and semitones[j] == semitones[k]:
+            j += 1
+        if semitones[k] is not None and j - k >= min_frames:
+            if runs and runs[-1][2] == semitones[k]:
+                runs[-1][1] = j
+            else:
+                runs.append([k, j, semitones[k]])
+        k = j
+    return runs
+
+
+def sung_pitches(notes, track, gap, beat_seconds):
+    """Each note takes the pitch sung during it, in the key of the song, and
+    a note over several steady pitches (a syllable sung up or down the
+    scale) is split into one note per pitch. UltraSinger's notes, and more
+    so once merged and moved, are often not what is sung: against the
+    human charts of La salvación and Cowboys de la A3, the right pitch
+    went from 66% and 73% of the time (median of UltraSinger's track) to
+    89% and 93%."""
+    import numpy as np
+    scale = song_scale(track)
+    min_frames = int(round(MIN_STEADY_SECONDS / PITCH_FRAME))
+    i = 0
+    while i < len(notes):
+        note = notes[i]
+        a = int((gap + note.start * beat_seconds) / PITCH_FRAME)
+        b = int((gap + note.end * beat_seconds) / PITCH_FRAME)
+        sung = track[max(0, a):max(0, b)]
+        known = sung[~np.isnan(sung)]
+        if len(known) < 2:
+            i += 1
+            continue
+        note.pitch = in_key(float(np.median(known)), scale) - 48  # UltraStar 0 = MIDI 48
+        runs = steady_runs([None if np.isnan(x) else in_key(x, scale) for x in sung], min_frames) \
+            if b - a >= 2 * min_frames else []
+        if len(runs) < 2:
+            i += 1
+            continue
+        cuts = [note.start] + [note.start + int(round(r[0] * PITCH_FRAME / beat_seconds)) for r in runs[1:]] + [note.end]
+        pieces = []
+        for k, run in enumerate(runs):
+            if cuts[k + 1] > cuts[k]:
+                text = note.text.rstrip(" ") if not pieces else "~"
+                pieces.append(Note(note.kind, cuts[k], cuts[k + 1] - cuts[k], run[2] - 48, text))
+        if len(pieces) < 2:
+            i += 1
+            continue
+        if note.text.endswith(" "):
+            pieces[-1].text += " "
+        notes[i:i + 1] = pieces
+        i += len(pieces)
 
 
 def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None):
@@ -485,7 +577,7 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
                 fit_line_end([n for word in line for n in word], voiced, gap_ms / 1000.0, beat_seconds)
                 trim_line_end(line[-1][-1], voiced, gap_ms / 1000.0, beat_seconds)
     # the pitch of each note, once it is where it is sung
-    if pitch_track:
+    if pitch_track is not None:
         sung_pitches(merged, pitch_track, gap_ms / 1000.0, beat_seconds)
         fold_octaves(merged)
     if lyric_lines:

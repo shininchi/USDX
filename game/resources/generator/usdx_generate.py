@@ -374,8 +374,10 @@ def clean_up_song(txt, vocals, lyrics=None):
         import lyrics_hook
         lyric_lines = lyrics_hook.read_lyrics(lyrics)
     voiced = song_cleanup.vocal_activity(vocals) if vocals else []
-    track = pitch_track_file(os.path.dirname(txt))
-    pitch_track = song_cleanup.read_pitch_track(track) if track else None
+    pitch_track = song_cleanup.vocal_pitch(vocals) if vocals else None
+    if pitch_track is None:
+        track = pitch_track_file(os.path.dirname(txt))
+        pitch_track = song_cleanup.read_pitch_track(track) if track else None
     body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines, voiced, pitch_track)
     with open(txt, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(header + body) + "\n")
