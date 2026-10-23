@@ -316,6 +316,7 @@ type
       LastY:                   Integer;
       Xmouse:                  Integer;
       VoicePitch:              array of single; // sung pitch (MIDI) every 10 ms, 0 = silence
+      HideNotes:               boolean;         // only the sung pitch is seen (H)
       ResizeNoteLeft:          boolean;
       ResizeNoteRight:         boolean;
       MoveNote:                boolean;
@@ -452,7 +453,9 @@ type
       function  ControlHelp: UTF8String;
       procedure DrawControlHelp;
       procedure LoadVoicePitch;
+      procedure SmoothVoicePitch;
       procedure DrawVoicePitch(X, YBaseNote, W, H: real; Track: integer);
+      procedure DrawPlayPosition(X, YBaseNote, W, H: real; Track: integer);
 
       constructor Create; override;
       destructor Destroy; override;
@@ -607,6 +610,7 @@ begin
         if (SDL_ModState = 0) or (SDL_ModState = KMOD_LALT) then HandleVideo(SDL_ModState)
         else HandlePaste(SDL_ModState);
       SDLK_T: HandleFixTimings(SDL_ModState);
+      SDLK_H: if SDL_ModState = 0 then HideNotes := not HideNotes;
       SDLK_P: HandlePlaySentence(SDL_ModState);
       SDLK_G: SetGoldenNote(SDL_ModState);
       SDLK_F: SetFreestyleNote(SDL_ModState);
@@ -5467,6 +5471,42 @@ end;
 // the generator leaves next to the song the pitch it heard in the separated
 // voice, as "<song>.pitch": a header line, then one value every 10 ms,
 // the MIDI pitch times 10 (0 where nobody sings)
+// a median of 7 frames (70 ms) keeps the sung notes and slides but not the
+// wobble of vibrato and pitch errors, which made the line hard to read
+procedure TScreenEditSub.SmoothVoicePitch;
+const
+  Half = 3;
+var
+  Source: array of single;
+  Window: array of single;
+  I, J, N, A, B: integer;
+  Swap:   single;
+begin
+  Source := Copy(VoicePitch);
+  SetLength(Window, 2 * Half + 1);
+  for I := 0 to System.High(Source) do
+  begin
+    if Source[I] <= 0 then
+      Continue;
+    N := 0;
+    for J := Max(0, I - Half) to Min(System.High(Source), I + Half) do
+      if Source[J] > 0 then
+      begin
+        Window[N] := Source[J];
+        Inc(N);
+      end;
+    for A := 1 to N - 1 do
+      for B := A downto 1 do
+        if Window[B] < Window[B - 1] then
+        begin
+          Swap := Window[B];
+          Window[B] := Window[B - 1];
+          Window[B - 1] := Swap;
+        end;
+    VoicePitch[I] := Window[N div 2];
+  end;
+end;
+
 procedure TScreenEditSub.LoadVoicePitch;
 var
   FileName: IPath;
@@ -5490,6 +5530,7 @@ begin
           Inc(Count);
         end;
       SetLength(VoicePitch, Count);
+      SmoothVoicePitch;
     except
       SetLength(VoicePitch, 0);
     end;
@@ -5562,11 +5603,28 @@ begin
       PX := X + (FrameBeat(I) - FirstBeat) * BeatW;
       PY := YBaseNote - (VoicePitch[I] - 48 + Shift - BaseNote) * Space / 2;
       if HasPrev then
-        Renderer.DrawLine(PrevX, PrevY, PX, PY, 0, 2, 0.2, 0.75, 1, 0.8);
+        Renderer.DrawLine(PrevX, PrevY, PX, PY, 0, 4, 0.95, 0.35, 0.05, 0.9);
       PrevX := PX;
       PrevY := PY;
       HasPrev := true;
     end;
+  end;
+end;
+
+// while the line plays, a bar at the moment heard
+procedure TScreenEditSub.DrawPlayPosition(X, YBaseNote, W, H: real; Track: integer);
+var
+  Len, PX: real;
+begin
+  if not (PlaySentence or PlayVideo) or (CurrentSong.BPM <= 0) then
+    Exit;
+  with CurrentSong.Tracks[Track].Lines[CurrentSong.Tracks[Track].CurrentLine] do
+  begin
+    if (HighNote < 0) or not HasLength(Len) or (Len <= 0) then
+      Exit;
+    PX := X + (GetMidBeat(AudioPlayback.Position - CurrentSong.GAP / 1000) - Notes[0].StartBeat) * W / Len;
+    if (PX >= X) and (PX <= X + W) then
+      Renderer.DrawLine(PX, Theme.EditSub.NotesBackground.Y, PX, Theme.EditSub.NotesBackground.Y + Theme.EditSub.NotesBackground.H, 0, 2, 0.9, 0.1, 0.1, 0.9);
   end;
 end;
 
@@ -6378,9 +6436,12 @@ begin
       // the sung voice behind the notes
       DrawVoicePitch(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.W, CurrentTrack);
       // draw notes
-      EditDrawLine(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.W, CurrentTrack);
+      if not HideNotes then
+        EditDrawLine(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.W, CurrentTrack);
       // draw text on notes
-      DrawText(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.H, CurrentTrack);
+      if not HideNotes then
+        DrawText(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.H, CurrentTrack);
+      DrawPlayPosition(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.H, CurrentTrack);
     end
     else
     begin
@@ -6393,9 +6454,12 @@ begin
       // the sung voice behind the notes
       DrawVoicePitch(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
       // draw notes
-      EditDrawLine(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
+      if not HideNotes then
+        EditDrawLine(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
       // draw text on notes
-      DrawText(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
+      if not HideNotes then
+        DrawText(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
+      DrawPlayPosition(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
     end;
 
     if Xmouse <> 0 then
