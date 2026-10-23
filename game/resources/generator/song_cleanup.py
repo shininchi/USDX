@@ -450,6 +450,18 @@ def vocal_pitch(vocals_wav):
         return None
 
 
+def write_pitch_file(path, track):
+    """Leaves the sung pitch next to the song for the editor to draw behind
+    the notes: a header line, then the MIDI pitch times 10 every 10 ms, 0
+    where nobody sings."""
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("# sung pitch: MIDI x10 every 10 ms, 0 = silence\n")
+            f.write("\n".join("0" if math.isnan(p) else str(int(round(p * 10))) for p in track) + "\n")
+    except Exception as e:  # the song works without it
+        print("No pitch file: %s" % e, flush=True)
+
+
 def read_pitch_track(path):
     """UltraSinger's pitch track (SwiftF0's cache: times, frequencies,
     confidence) as a vocal_pitch() one, None if it cannot be read."""

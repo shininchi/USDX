@@ -315,6 +315,7 @@ type
       LastX:                   Integer;
       LastY:                   Integer;
       Xmouse:                  Integer;
+      VoicePitch:              array of single; // sung pitch (MIDI) every 10 ms, 0 = silence
       ResizeNoteLeft:          boolean;
       ResizeNoteRight:         boolean;
       MoveNote:                boolean;
@@ -450,6 +451,8 @@ type
       // what the control under the mouse (or selected) does, at the bottom
       function  ControlHelp: UTF8String;
       procedure DrawControlHelp;
+      procedure LoadVoicePitch;
+      procedure DrawVoicePitch(X, YBaseNote, W, H: real; Track: integer);
 
       constructor Create; override;
       destructor Destroy; override;
@@ -470,6 +473,7 @@ const
 implementation
 
 uses
+  Classes,
   UDisplay,
   UDraw,
   UGraphic,
@@ -5460,6 +5464,112 @@ begin
     Result := Language.Translate('EDIT_TIP_' + Key);
 end;
 
+// the generator leaves next to the song the pitch it heard in the separated
+// voice, as "<song>.pitch": a header line, then one value every 10 ms,
+// the MIDI pitch times 10 (0 where nobody sings)
+procedure TScreenEditSub.LoadVoicePitch;
+var
+  FileName: IPath;
+  Lines:    TStringList;
+  I, Count: integer;
+begin
+  SetLength(VoicePitch, 0);
+  FileName := CurrentSong.Path.Append(CurrentSong.FileName.SetExtension('.pitch'));
+  if not FileName.IsFile then
+    Exit;
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile(FileName.ToNative);
+      SetLength(VoicePitch, Lines.Count);
+      Count := 0;
+      for I := 0 to Lines.Count - 1 do
+        if (Lines[I] <> '') and (Lines[I][1] <> '#') then
+        begin
+          VoicePitch[Count] := StrToIntDef(Lines[I], 0) / 10;
+          Inc(Count);
+        end;
+      SetLength(VoicePitch, Count);
+    except
+      SetLength(VoicePitch, 0);
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+// the sung pitch of the current line, drawn where notes of that pitch would
+// be, in the octave closest to the line's notes: a note sits on the curve
+// when it has the pitch sung at its time
+procedure TScreenEditSub.DrawVoicePitch(X, YBaseNote, W, H: real; Track: integer);
+const
+  NumLines = 10;
+var
+  Len, Space, BeatW, FirstBeat, StartTime, EndTime: real;
+  ToneSum, VoiceSum, Shift: real;
+  First, Last, I, Voiced: integer;
+  PrevX, PrevY, PX, PY: real;
+  HasPrev: boolean;
+
+  function FrameBeat(Frame: integer): real;
+  begin
+    Result := (Frame / 100 - CurrentSong.GAP / 1000) * CurrentSong.BPM / 60;
+  end;
+
+begin
+  if (Length(VoicePitch) = 0) or (CurrentSong.BPM <= 0) then
+    Exit;
+  with CurrentSong.Tracks[Track].Lines[CurrentSong.Tracks[Track].CurrentLine] do
+  begin
+    if (HighNote < 0) or not HasLength(Len) or (Len <= 0) then
+      Exit;
+    Space := H / (NumLines - 1);
+    BeatW := W / Len;
+    FirstBeat := Notes[0].StartBeat;
+    StartTime := CurrentSong.GAP / 1000 + FirstBeat * 60 / CurrentSong.BPM;
+    EndTime := CurrentSong.GAP / 1000 + (FirstBeat + Len) * 60 / CurrentSong.BPM;
+    First := Max(0, Floor(StartTime * 100));
+    Last := Min(System.High(VoicePitch), Ceil(EndTime * 100));
+    if First > Last then
+      Exit;
+
+    // the charts write C3 as 0 (MIDI 48), in whatever octave suits the line
+    ToneSum := 0;
+    for I := 0 to HighNote do
+      ToneSum := ToneSum + Notes[I].Tone;
+    VoiceSum := 0;
+    Voiced := 0;
+    for I := First to Last do
+      if VoicePitch[I] > 0 then
+      begin
+        VoiceSum := VoiceSum + VoicePitch[I] - 48;
+        Inc(Voiced);
+      end;
+    if Voiced = 0 then
+      Exit;
+    Shift := 12 * Round((ToneSum / (HighNote + 1) - VoiceSum / Voiced) / 12);
+
+    HasPrev := false;
+    PrevX := 0;
+    PrevY := 0;
+    for I := First to Last do
+    begin
+      if VoicePitch[I] <= 0 then
+      begin
+        HasPrev := false;
+        Continue;
+      end;
+      PX := X + (FrameBeat(I) - FirstBeat) * BeatW;
+      PY := YBaseNote - (VoicePitch[I] - 48 + Shift - BaseNote) * Space / 2;
+      if HasPrev then
+        Renderer.DrawLine(PrevX, PrevY, PX, PY, 0, 2, 0.2, 0.75, 1, 0.8);
+      PrevX := PX;
+      PrevY := PY;
+      HasPrev := true;
+    end;
+  end;
+end;
+
 procedure TScreenEditSub.DrawControlHelp;
 const
   BAR_Y = 576;
@@ -5573,6 +5683,8 @@ begin
       end;
     MidiOut.Open;
   {$ENDIF}
+
+    LoadVoicePitch;
 
     if not Help.SetHelpID(ID) then
       Log.LogWarn('No Entry for Help-ID ' + ID, 'ScreenEditSub');
@@ -6263,6 +6375,8 @@ begin
       SingDrawNoteLines(Theme.EditSub.NotesBackground.X, Theme.EditSub.NotesBackground.Y, Theme.EditSub.NotesBackground.X + Theme.EditSub.NotesBackground.W + Xmouse, 15, 2);
       // vertical lines
       EditDrawBeatDelimiters(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.H, CurrentTrack);
+      // the sung voice behind the notes
+      DrawVoicePitch(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.W, CurrentTrack);
       // draw notes
       EditDrawLine(Theme.EditSub.NotesBackground.X + NotesSkipX, Theme.EditSub.NotesBackground.Y + 7 * LineSpacing, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.W, CurrentTrack);
       // draw text on notes
@@ -6276,6 +6390,8 @@ begin
       SingDrawNoteLines(Theme.EditSub.NotesBackground.X + Xmouse, Theme.EditSub.NotesBackground.Y, Theme.EditSub.NotesBackground.X + Theme.EditSub.NotesBackground.W, 15, 2);
       // vertical lines
       EditDrawBeatDelimiters(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
+      // the sung voice behind the notes
+      DrawVoicePitch(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
       // draw notes
       EditDrawLine(Theme.EditSub.NotesBackground.X + NotesSkipX + Xmouse, Theme.EditSub.NotesBackground.Y + (7/9) * Theme.EditSub.NotesBackground.H, Theme.EditSub.NotesBackground.W - 2 * NotesSkipX, Theme.EditSub.NotesBackground.H, CurrentTrack);
       // draw text on notes

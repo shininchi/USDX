@@ -378,6 +378,8 @@ def clean_up_song(txt, vocals, lyrics=None):
     if pitch_track is None:
         track = pitch_track_file(os.path.dirname(txt))
         pitch_track = song_cleanup.read_pitch_track(track) if track else None
+    if pitch_track is not None:
+        song_cleanup.write_pitch_file(os.path.splitext(txt)[0] + ".pitch", pitch_track)
     split = song_cleanup.syllable_splitter(song_language(txt) or "")
     body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines, voiced, pitch_track, split)
     with open(txt, "w", encoding="utf-8", newline="\n") as f:
