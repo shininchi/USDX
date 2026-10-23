@@ -510,6 +510,70 @@ def steady_runs(semitones, min_frames):
     return runs
 
 
+MIN_SYLLABLE_SECONDS = 0.08  # syllables split from a joined note last at least this
+
+
+def syllable_splitter(language):
+    """A function giving the syllables of a word in the language (a code
+    like "es"), None for words of one; None if there is no dictionary."""
+    try:
+        from hyphen import Hyphenator, dictools
+        installed = [d for d in dictools.list_installed() if d.split("_")[0] == language]
+        if not installed:
+            return None
+        hyphenator = Hyphenator(installed[0])
+    except Exception as e:  # cleaning up still works without it
+        print("No hyphenation: %s" % e, flush=True)
+        return None
+
+    def split(word):
+        try:
+            parts = hyphenator.syllables(word)
+        except Exception:
+            return None
+        return parts if len(parts) > 1 and "".join(parts) == word else None
+    return split
+
+
+def split_joined_syllables(notes, beat_seconds, split):
+    """UltraSinger joins the syllables of a word it hears on one pitch into
+    one note ("resistir"), so the singer gets a single bar for three sung
+    syllables. Each joined syllable gets its note again, sharing the time
+    evenly: cutting at the consonants instead matched human charts no
+    better. Returns the new list of notes."""
+    min_beats = max(1, round(MIN_SYLLABLE_SECONDS / beat_seconds))
+    out = []
+    for word in words(notes):
+        groups = []
+        for note in word:
+            if groups and note.is_continuation:
+                groups[-1].append(note)
+            else:
+                groups.append([note])
+        for group in groups:
+            text = group[0].text.strip()
+            parts = split(text) if text and not group[0].is_continuation else None
+            start, end = group[0].start, group[-1].end
+            if not parts or end - start < min_beats * len(parts):
+                out.extend(group)
+                continue
+            cuts = [start + int(round((end - start) * i / len(parts))) for i in range(1, len(parts))]
+            # the syllable cuts and the pitch changes already there
+            bounds = sorted(set([start, end] + cuts + [n.start for n in group[1:]]))
+            for s0, s1 in zip(bounds, bounds[1:]):
+                source = next(n for n in reversed(group) if n.start <= s0)
+                if s0 == start:
+                    piece_text = parts[0]
+                elif s0 in cuts:
+                    piece_text = parts[cuts.index(s0) + 1]
+                else:
+                    piece_text = "~"
+                out.append(Note(source.kind, s0, s1 - s0, source.pitch, piece_text))
+            if group[-1].ends_word:
+                out[-1].text += " "
+    return out
+
+
 def sung_pitches(notes, track, gap, beat_seconds):
     """Each note takes the pitch sung during it, in the key of the song, and
     a note over several steady pitches (a syllable sung up or down the
@@ -552,7 +616,7 @@ def sung_pitches(notes, track, gap, beat_seconds):
         i += len(pieces)
 
 
-def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None):
+def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None, split=None):
     beat_seconds = 60.0 / (bpm * 4)
     notes = parse_notes(body)
     if not notes:
@@ -568,6 +632,9 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
     for a, b in zip(merged, merged[1:]):
         if a.end > b.start:
             a.length = max(1, b.start - a.start)
+    # one note per sung syllable, also where UltraSinger joined them
+    if split:
+        merged = split_joined_syllables(merged, beat_seconds, split)
 
     out = []
     # the last syllable of each line ends with the voice
