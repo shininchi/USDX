@@ -462,8 +462,11 @@ begin
   // a microphone stopped sending sound (some reset after a hard knock), or
   // none is captured (plugged in after the start): look for the microphones
   // again, like the microphone options do, and reopen the capture
+  // (not for none while singing: looking freezes the song for a moment, and
+  // with no microphone at all it would every few seconds)
   if AudioCaptureRunning and (Elapsed(RestartedAt) > 5000) and
-     (AudioCaptureStalled(1500) or (AudioCaptureDevices = 0)) then
+     (AudioCaptureStalled(1500) or
+      ((AudioCaptureDevices = 0) and (Display.CurrentScreen <> @ScreenSing))) then
   begin
     if AudioCaptureDevices = 0 then
       Log.LogWarn('No microphone is captured, looking for them again', 'MicTaps')
