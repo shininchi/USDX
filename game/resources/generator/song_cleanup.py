@@ -618,9 +618,84 @@ def join_vowel_syllables(notes, beat_seconds):
 MIN_SYLLABLE_SECONDS = 0.08  # syllables split from a joined note last at least this
 
 
+SPANISH_VOWELS = "aeiouáéíóúü"
+SPANISH_STRONG = "aeoáéóíú"  # two of these are sung apart (hiatus): rí-o, ca-er
+SPANISH_ONSETS = {"pl", "pr", "bl", "br", "fl", "fr", "cl", "cr", "gl", "gr", "tr", "dr", "kl", "kr"}
+
+
+def spanish_syllables(word):
+    """The syllables of a Spanish word by the rules of its spelling. The
+    hyphenation dictionaries never split off one letter at the start or
+    the end of a word, which are syllables when sung: e-se, a-mor, o-ro."""
+    core = word.strip()
+    lead = len(core) - len(core.lstrip("¡¿\"'(«"))
+    trail = len(core) - len(core.rstrip("!?.,;:\"')»…"))
+    head, body, tail = core[:lead], core[lead:len(core) - trail], core[len(core) - trail:]
+    if not body or not body.isalpha():
+        return None
+    low = body.lower()
+    # units: letters, with ch, ll, rr and the qu/gu before e and i as one consonant
+    units, i = [], 0
+    while i < len(low):
+        pair = low[i:i + 2]
+        if pair in ("ch", "ll", "rr") or (pair in ("qu", "gu") and low[i + 2:i + 3] in ("e", "i", "é", "í")):
+            units.append((body[i:i + 2], False))
+            i += 2
+            continue
+        c = low[i]
+        vowel = c in SPANISH_VOWELS
+        if c == "y":  # a vowel at the end of a word or before a consonant: hay, rey
+            vowel = i + 1 == len(low) or low[i + 1] not in SPANISH_VOWELS
+        units.append((body[i], vowel))
+        i += 1
+    # nuclei: runs of vowels, apart where two strong ones meet
+    syllables, current, consonants = [], "", []
+    prev_vowel = None
+    for text, vowel in units:
+        if vowel:
+            v = text.lower()
+            if prev_vowel is not None and not consonants and \
+               prev_vowel in SPANISH_STRONG and v in SPANISH_STRONG:
+                syllables.append(current)
+                current = ""
+            elif prev_vowel is not None and consonants:
+                # consonants between two vowels: one goes with the next
+                # syllable, two that start syllables (pr, bl...) go together
+                n = len(consonants)
+                pair = lambda a, b: (consonants[a] + consonants[b]).lower() in SPANISH_ONSETS
+                if n == 1:
+                    keep = 0
+                elif n == 2:
+                    keep = 0 if pair(0, 1) else 1
+                elif n == 3:
+                    keep = 1 if pair(1, 2) else 2
+                else:
+                    keep = 2
+                syllables.append(current + "".join(consonants[:keep]))
+                current = "".join(consonants[keep:])
+                consonants = []
+            current += "".join(consonants) + text
+            consonants = []
+            prev_vowel = v
+        else:
+            if prev_vowel is None:
+                current += text
+            else:
+                consonants.append(text)
+    current += "".join(consonants)
+    syllables.append(current)
+    if len(syllables) < 2:
+        return None
+    syllables[0] = head + syllables[0]
+    syllables[-1] = syllables[-1] + tail
+    return syllables if "".join(syllables) == core else None
+
+
 def syllable_splitter(language):
     """A function giving the syllables of a word in the language (a code
     like "es"), None for words of one; None if there is no dictionary."""
+    if language == "es":
+        return spanish_syllables
     try:
         from hyphen import Hyphenator, dictools
         installed = [d for d in dictools.list_installed() if d.split("_")[0] == language]
