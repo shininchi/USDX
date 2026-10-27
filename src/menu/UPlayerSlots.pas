@@ -26,7 +26,8 @@ unit UPlayerSlots;
  * One box per player at the bottom left of the song selection: the
  * player's number in a box of the player's color, filled and with the name
  * below when the player has a name of their own (not the default
- * "PlayerN"), and a crown over the winners of the last song.
+ * "PlayerN"), and a crown over the winners of the last song, on the
+ * microphone they hold now.
  *
  * It also turns taps on the microphones (UMicTaps) into commands: the box
  * of the microphone flashes on each tap, and while singing three taps
@@ -98,7 +99,6 @@ const
 
 var
   Winner:       array[0..IMaxPlayerCount-1] of boolean;
-  WinStreak:    array[0..IMaxPlayerCount-1] of integer; // songs won in a row by the crown holders
   Streaks:      TStringList;  // player (name or #slot) = songs won in a row
   SeriesCount:  array[0..IMaxPlayerCount-1] of integer;
   SeriesTicks:  array[0..IMaxPlayerCount-1] of cardinal;
@@ -186,7 +186,6 @@ begin
     for I := 0 to High(Winner) do
     begin
       Winner[I] := (Best > 0) and (I <= High(Player)) and (Player[I].ScoreTotalInt = Best);
-      WinStreak[I] := 0;
       if I > High(Player) then
         Continue;
       // the streak goes with the player, by name (or by microphone without one)
@@ -201,7 +200,6 @@ begin
       Streaks.Values[Key] := IntToStr(Streak);
       if Winner[I] then
       begin
-        WinStreak[I] := Streak;
         if HasName(I) then
         begin
           RecordStreak(Key, Streak);
@@ -265,6 +263,19 @@ begin
   finally
     Now.Free;
   end;
+end;
+
+// songs won in a row by the player on a microphone now, 0 = no crown; the
+// crown goes with the name, not with the microphone
+function CrownStreak(Slot: integer): integer;
+begin
+  Result := 0;
+  if Streaks = nil then
+    Exit;
+  if HasName(Slot) then
+    Result := StrToIntDef(Streaks.Values[Trim(Ini.Name[Slot])], 0)
+  else
+    Result := StrToIntDef(Streaks.Values['#' + IntToStr(Slot)], 0);
 end;
 
 { commands }
@@ -744,6 +755,7 @@ procedure PlayerSlotsDraw;
 var
   DX, DY:   integer;
   I, N:     integer;
+  Streak:   integer;
   X, Y, CX: single;
   Col:      TRGB;
   Black:    TRGB;
@@ -798,15 +810,16 @@ begin
       Black.R := 0; Black.G := 0; Black.B := 0;
     end;
 
-    if Winner[I] then
+    Streak := CrownStreak(I);
+    if Streak > 0 then
     begin
       DrawCrown(CX, Y - 4);
       // songs won in a row
-      if WinStreak[I] >= 2 then
+      if Streak >= 2 then
       begin
         SetFontStyle(ftBold);
         SetFontSize(16);
-        Text := 'x' + IntToStr(WinStreak[I]);
+        Text := 'x' + IntToStr(Streak);
         Renderer.DepthTest := false;
         // right of the crown, its bottom on the crown's base, gold with a
         // dark outline like the crown
