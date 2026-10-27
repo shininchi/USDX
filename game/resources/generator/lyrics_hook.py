@@ -397,6 +397,12 @@ def install(lyrics_path):
     original_align = whisperx.align
 
     def align(segments, model, metadata, audio, *args, **kwargs):
+        kwargs["return_char_alignments"] = True
+        result = aligned(segments, model, metadata, audio, *args, **kwargs)
+        save_char_times(result)
+        return result
+
+    def aligned(segments, model, metadata, audio, *args, **kwargs):
         if lines:
             seconds = len(audio) / 16000.0 if hasattr(audio, "__len__") else None
             fitted = fitted_times(timed, segments) if timed and all(t is not None for t, _ in timed) else None
@@ -409,6 +415,32 @@ def install(lyrics_path):
         return original_align(segments, model, metadata, audio, *args, **kwargs)
 
     whisperx.align = align
+
+
+def save_char_times(result):
+    """Leaves for the clean-up the time WhisperX found for each letter, word
+    by word: UltraSinger shares a word's time evenly among its syllables,
+    and the letters say when each one is sung."""
+    path = os.environ.get("USDX_CHAR_TIMES")
+    if not path:
+        return
+    words = []
+    for segment in result.get("segments", []):
+        current = None
+        for char in segment.get("chars") or []:
+            if char.get("char") == " ":
+                current = None
+                continue
+            if current is None:
+                current = []
+                words.append(current)
+            current.append([char.get("char"), char.get("start")])
+    try:
+        import json
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(words, f, ensure_ascii=False)
+    except Exception as e:  # the clean-up shares the time evenly then
+        print("No letter times: %s" % e, flush=True)
 
 
 def keep_words_in_silence():

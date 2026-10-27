@@ -285,7 +285,7 @@ def run_ultrasinger(args, out_dir, language, lyrics):
             cmd += ["--whisper_align_model", ALIGN_MODELS[language]]
     if args.ffmpeg:
         cmd += ["--ffmpeg", args.ffmpeg]
-    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    env = dict(os.environ, PYTHONUNBUFFERED="1", USDX_CHAR_TIMES=os.path.join(out_dir, CHAR_TIMES))
     if os.path.isfile(args.input):
         # its tags and cover are used, not what MusicBrainz says (minutes)
         env["USDX_SKIP_MUSICBRAINZ"] = "1"
@@ -361,7 +361,10 @@ def pitch_track_file(folder):
     return None
 
 
-def clean_up_song(txt, vocals, lyrics=None):
+CHAR_TIMES = "char_times.json"  # the letters' times, left by lyrics_hook
+
+
+def clean_up_song(txt, vocals, lyrics=None, char_times=None):
     """Rewrites UltraSinger's notes with song_cleanup."""
     header, body = split_song(read_text(txt))
     bpm = tag_value(header, "BPM")
@@ -382,7 +385,11 @@ def clean_up_song(txt, vocals, lyrics=None):
     if pitch_track is not None:
         song_cleanup.write_pitch_file(os.path.splitext(txt)[0] + ".pitch", pitch_track)
     split = song_cleanup.syllable_splitter(song_language(txt) or "")
-    body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines, voiced, pitch_track, split, levels)
+    letters = None
+    if char_times and os.path.exists(char_times):
+        with open(char_times, encoding="utf-8") as f:
+            letters = json.load(f)
+    body = song_cleanup.clean_up(body, bpm, gap, onsets, lyric_lines, voiced, pitch_track, split, levels, letters)
     with open(txt, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(header + body) + "\n")
 
@@ -680,7 +687,7 @@ def main():
             run_ultrasinger(args, work, language_code(args.fallback_language), lyrics)
         txt = find_txt(work)
         say("@@STAGE write")
-        clean_up_song(txt, find_file(work, "vocals.wav"), lyrics)
+        clean_up_song(txt, find_file(work, "vocals.wav"), lyrics, os.path.join(work, CHAR_TIMES))
         if args.replace:
             result = replace_notes(args.replace, txt)
         else:

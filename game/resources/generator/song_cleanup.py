@@ -640,6 +640,52 @@ def syllable_splitter(language):
     return split
 
 
+def letters_of(text):
+    return [c for c in text.lower() if c.isalnum()]
+
+
+def place_syllables_by_letters(notes, letters, gap, beat_seconds):
+    """Starts each syllable inside a word when WhisperX heard its first
+    letter, instead of sharing the word's time evenly among its syllables
+    ("sal-va-ción" sung slowly on "va" put "va" where "sal" is still sung).
+    letters: for each word aligned, [letter, start or None] in order; words
+    are matched to them in order by their letters."""
+    min_beats = max(1, round(MIN_SYLLABLE_SECONDS / beat_seconds))
+    aligned = [(letters_of("".join(c for c, _ in word)), word) for word in letters]
+    k = 0
+    for word in words(notes):
+        sylls = []
+        for note in word:
+            if sylls and note.is_continuation:
+                sylls[-1].append(note)
+            else:
+                sylls.append([note])
+        text = [letters_of(s[0].text) for s in sylls]
+        whole = sum(text, [])
+        match = next((j for j in range(k, min(k + 4, len(aligned))) if aligned[j][0] == whole), None)
+        if match is None:
+            continue
+        k = match + 1
+        times = [t for c, t in aligned[match][1] if c.isalnum() or c.lower() in "áéíóúüñ"]
+        if len(sylls) < 2 or len(times) != len(whole):
+            continue
+        offset = 0
+        for i in range(1, len(sylls)):
+            offset += len(text[i - 1])
+            known = [t for t in times[offset:offset + len(text[i])] if t is not None]
+            if not known:
+                continue
+            new = int(round((known[0] - gap) / beat_seconds))
+            prev, cur = sylls[i - 1], sylls[i]
+            latest = cur[0].end - min_beats if len(cur) == 1 else cur[1].start - min_beats
+            new = max(prev[-1].start + min_beats, min(latest, new))
+            if new == cur[0].start:
+                continue
+            end = cur[0].end
+            cur[0].start, cur[0].length = new, end - new
+            prev[-1].length = new - prev[-1].start
+
+
 def split_joined_syllables(notes, beat_seconds, split):
     """UltraSinger joins the syllables of a word it hears on one pitch into
     one note ("resistir"), so the singer gets a single bar for three sung
@@ -749,7 +795,7 @@ def trim_to_steady(notes, track, gap, beat_seconds):
             note.start, note.length = start, end - start
 
 
-def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None, split=None, levels=None):
+def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None, split=None, levels=None, letters=None):
     beat_seconds = 60.0 / (bpm * 4)
     notes = parse_notes(body)
     if not notes:
@@ -768,6 +814,8 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
     # one note per sung syllable, also where UltraSinger joined them
     if split:
         merged = split_joined_syllables(merged, beat_seconds, split)
+    if letters:
+        place_syllables_by_letters(merged, letters, gap_ms / 1000.0, beat_seconds)
 
     out = []
     # the last syllable of each line ends with the voice
