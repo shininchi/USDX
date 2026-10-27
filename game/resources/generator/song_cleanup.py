@@ -522,6 +522,49 @@ def steady_runs(semitones, min_frames):
     return runs
 
 
+STRAY_SEMITONES = 12   # a note this far from the singer's usual pitch
+STRAY_DB = 6           # and this much quieter than the loudest note around
+STRAY_AROUND = 4.0     # seconds on each side, is not the singer
+
+
+def drop_stray_notes(notes, levels, gap, beat_seconds):
+    """Reverb, echoes and backing voices left in the separated vocals make
+    notes far above or below the singer and quieter than them, often held
+    at the end of a line where nobody is heard. Such a hold is dropped; a
+    syllable keeps its note, moved to the singer's octave. Returns the new
+    list of notes."""
+    if not notes or not levels:
+        return notes
+    lengths = sorted((n.pitch, n.length) for n in notes)
+    half, total, usual = sum(l for _, l in lengths) / 2.0, 0, lengths[0][0]
+    for pitch, length in lengths:
+        total += length
+        if total >= half:
+            usual = pitch
+            break
+
+    def level(note):
+        a = max(0, int((gap + note.start * beat_seconds) / PITCH_FRAME))
+        b = min(len(levels), max(a + 1, int((gap + note.end * beat_seconds) / PITCH_FRAME)))
+        frames = sorted(levels[a:b])
+        return frames[len(frames) // 2] if frames else -100
+
+    loudness = [level(n) for n in notes]
+    around = STRAY_AROUND / beat_seconds
+    out = []
+    for i, note in enumerate(notes):
+        loudest = max(loudness[j] for j in range(len(notes))
+                      if abs(notes[j].start - note.start) <= around)
+        if abs(note.pitch - usual) > STRAY_SEMITONES and loudness[i] < loudest - STRAY_DB:
+            if note.is_continuation:
+                if note.ends_word and out and not out[-1].ends_word:
+                    out[-1].text += " "
+                continue
+            note.pitch -= 12 * round((note.pitch - usual) / 12.0)
+        out.append(note)
+    return out
+
+
 MIN_SYLLABLE_SECONDS = 0.08  # syllables split from a joined note last at least this
 
 
@@ -628,7 +671,7 @@ def sung_pitches(notes, track, gap, beat_seconds):
         i += len(pieces)
 
 
-def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None, split=None):
+def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pitch_track=None, split=None, levels=None):
     beat_seconds = 60.0 / (bpm * 4)
     notes = parse_notes(body)
     if not notes:
@@ -659,6 +702,7 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
     if pitch_track is not None:
         sung_pitches(merged, pitch_track, gap_ms / 1000.0, beat_seconds)
         fold_octaves(merged)
+        merged = drop_stray_notes(merged, levels, gap_ms / 1000.0, beat_seconds)
     if lyric_lines:
         lines = lines_like_lyrics(merged, lyric_lines)
     else:
@@ -677,18 +721,25 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
     return out
 
 
-def vocal_activity(vocals_wav):
-    """For each 10 ms of the separated vocals, whether the voice sounds."""
+def vocal_levels(vocals_wav):
+    """For each 10 ms of the separated vocals, its loudness in dB below the
+    loudest moment."""
     try:
         import librosa
         import numpy as np
         y, sr = librosa.load(vocals_wav, sr=16000, mono=True)
         rms = librosa.feature.rms(y=y, frame_length=640, hop_length=160)[0]
-        db = librosa.amplitude_to_db(rms, ref=np.max)
-        return list(db > -32)
+        return list(librosa.amplitude_to_db(rms, ref=np.max))
     except Exception as e:  # cleaning up still works without it
-        print("No vocal activity: %s" % e, flush=True)
+        print("No vocal levels: %s" % e, flush=True)
         return []
+
+
+def vocal_activity(vocals_wav, levels=None):
+    """For each 10 ms of the separated vocals, whether the voice sounds."""
+    if levels is None:
+        levels = vocal_levels(vocals_wav)
+    return [db > -32 for db in levels]
 
 
 def vocal_onsets(vocals_wav):
