@@ -479,10 +479,12 @@ def keep_words_in_silence():
     silence_processing.remove_silence_from_transcription_data = remove_silence
 
 
-# H.264 up to 1080p: YouTube's best is often AV1 in 4K, which the game
-# decodes in software and stutters on
-PLAYABLE_VIDEO = ("bestvideo[vcodec^=avc1][height<=1080]+bestaudio"
-                  "/bestvideo[ext=mp4][height<=1080]+bestaudio/best[height<=1080]/best")
+# VP9 up to 1080p: YouTube's best is often AV1 in 4K, which the game
+# decodes in software and stutters on, and H.264 has B-frames, which judder
+# because the game times frames of .mp4 files by their decoding order
+PLAYABLE_VIDEO = ("bestvideo[vcodec^=vp9][height<=1080]+bestaudio"
+                  "/bestvideo[vcodec^=vp09][height<=1080]+bestaudio"
+                  "/bestvideo[vcodec^=avc1][height<=1080]+bestaudio/best[height<=1080]/best")
 
 
 def playable_video():
