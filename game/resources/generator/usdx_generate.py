@@ -104,7 +104,7 @@ def lrclib_request(path, params):
             print("LRCLIB: %s" % e, flush=True)
             return None
         time.sleep(2 + 3 * attempt)
-    print("LRCLIB is busy, using what Whisper hears", flush=True)
+    print("LRCLIB is busy", flush=True)
     return None
 
 
@@ -423,6 +423,38 @@ def name_from_file(path, ffmpeg_dir=None):
     return (artist, title) if artist and title else None
 
 
+# what video sites add to a song's name: "(Official Video)", "[Videoclip]"
+VIDEO_TAGS = re.compile(r"\s*[\(\[][^\)\]]*(official|oficial|video|v[ií]deo|clip|lyric|letra|audio|"
+                        r"visuali[sz]er|hd|4k|remaster)[^\)\]]*[\)\]]", re.IGNORECASE)
+
+
+def name_from_url(url):
+    """(artist, title, seconds) of a video by its page: the music
+    metadata when the site has it, else its title "Artist - Song" without
+    what video sites add, or the channel as the artist; None if unknown."""
+    try:
+        import yt_dlp
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True,
+                               "skip_download": True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:  # the lyrics are heard by Whisper then
+        print("No video info: %s" % e, flush=True)
+        return None
+    seconds = info.get("duration") or 0
+    artist = (info.get("artist") or info.get("creator") or "").split(",")[0].strip()
+    track = (info.get("track") or "").strip()
+    if artist and track:
+        return artist, track, seconds
+    title = VIDEO_TAGS.sub("", info.get("title") or "").strip()
+    for dash in (" - ", " – ", " — "):
+        if dash in title:
+            artist, track = (p.strip() for p in title.split(dash, 1))
+            if artist and track:
+                return artist, track, seconds
+    channel = re.sub(r"(\s*-\s*Topic|VEVO)$", "", info.get("channel") or info.get("uploader") or "").strip()
+    return (channel, title, seconds) if channel and title else None
+
+
 def lyrics_origin(source, lyrics):
     """Where the lyrics came from, for the comment of the song."""
     if source == "lrclib":
@@ -661,7 +693,7 @@ def main():
         lyrics = find_lyrics(args)
         source = "user" if lyrics else "whisper"
         if not lyrics and not args.no_lrclib:
-            names = None
+            names, seconds = None, 0
             if args.replace:
                 header = split_song(read_text(args.replace))[0]
                 values = {tag_of(l): l.split(":", 1)[1].strip() for l in header if ":" in l}
@@ -669,8 +701,14 @@ def main():
                     names = (values["ARTIST"], values["TITLE"])
             elif os.path.isfile(args.input):
                 names = name_from_file(args.input, args.ffmpeg)
+            elif re.match(r"https?://", args.input):
+                found = name_from_url(args.input)
+                if found:
+                    names, seconds = found[:2], found[2]
             if names:
-                lyrics = fetch_lyrics(names[0], names[1], audio_seconds(args.input, args.ffmpeg), work)
+                if not seconds:
+                    seconds = audio_seconds(args.input, args.ffmpeg)
+                lyrics = fetch_lyrics(names[0], names[1], seconds, work)
                 if lyrics:
                     source = "lrclib"
         say("@@LYRICS " + source)

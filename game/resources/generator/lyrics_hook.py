@@ -479,6 +479,27 @@ def keep_words_in_silence():
     silence_processing.remove_silence_from_transcription_data = remove_silence
 
 
+# H.264 up to 1080p: YouTube's best is often AV1 in 4K, which the game
+# decodes in software and stutters on
+PLAYABLE_VIDEO = ("bestvideo[vcodec^=avc1][height<=1080]+bestaudio"
+                  "/bestvideo[ext=mp4][height<=1080]+bestaudio/best[height<=1080]/best")
+
+
+def playable_video():
+    """Downloads videos the game plays smoothly."""
+    from modules.Audio import youtube
+    original = getattr(youtube, "__start_download", None)
+    if original is None:
+        return
+
+    def start_download(ydl_opts, url):
+        if str(ydl_opts.get("format", "")).startswith("bestvideo"):
+            ydl_opts = dict(ydl_opts, format=PLAYABLE_VIDEO)
+        return original(ydl_opts, url)
+
+    setattr(youtube, "__start_download", start_download)
+
+
 def skip_musicbrainz():
     """UltraSinger looks the song up on MusicBrainz and asks the Cover Art
     Archive for the cover of every release found, which takes minutes;
@@ -502,6 +523,7 @@ def main():
         keep_words_in_silence()
     if os.environ.get("USDX_SKIP_MUSICBRAINZ"):
         skip_musicbrainz()
+    playable_video()
     runpy.run_path(script, run_name="__main__")
 
 
