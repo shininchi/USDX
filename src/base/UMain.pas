@@ -138,6 +138,39 @@ begin
   end;
 end;
 
+{$IFDEF DARWIN}
+type
+  TDlInfo = record
+    dli_fname: PAnsiChar;
+    dli_fbase: Pointer;
+    dli_sname: PAnsiChar;
+    dli_saddr: Pointer;
+  end;
+
+function dladdr(Addr: Pointer; out Info: TDlInfo): longint; cdecl; external 'c' name 'dladdr';
+{$ENDIF}
+
+// the library and function of an address, also in the libraries the game
+// loads (FFmpeg, SDL, FreeType), which the backtrace leaves as bare numbers
+function DescribeAddress(Addr: CodePointer): string;
+{$IFDEF DARWIN}
+var
+  Info: TDlInfo;
+{$ENDIF}
+begin
+  Result := BackTraceStrFunc(Addr);
+  {$IFDEF DARWIN}
+  if (dladdr(Addr, Info) <> 0) and (Info.dli_fname <> nil) then
+  begin
+    Result := Result + '  ' + ExtractFileName(string(Info.dli_fname)) +
+      Format(' +$%x', [PtrUInt(Addr) - PtrUInt(Info.dli_fbase)]);
+    if Info.dli_sname <> nil then
+      Result := Result + ' ' + string(Info.dli_sname) +
+        Format(' +%d', [PtrUInt(Addr) - PtrUInt(Info.dli_saddr)]);
+  end;
+  {$ENDIF}
+end;
+
 procedure LogUnhandledException(Obj: TObject; Addr: CodePointer; FrameCount: Longint; Frames: PCodePointer);
 var
   Report: string;
@@ -154,9 +187,9 @@ begin
   // with the place of Main in memory and in the binary (nm), atos turns
   // these addresses into files and lines
   Report := Report + Format('Main at $%x', [PtrUInt(@Main)]) + LineEnding;
-  Report := Report + BackTraceStrFunc(Addr);
+  Report := Report + DescribeAddress(Addr);
   for I := 0 to FrameCount - 1 do
-    Report := Report + LineEnding + BackTraceStrFunc(Frames[I]);
+    Report := Report + LineEnding + DescribeAddress(Frames[I]);
   WriteCrashLog(Report);
   if Assigned(PrevExceptProc) then
     PrevExceptProc(Obj, Addr, FrameCount, Frames);
