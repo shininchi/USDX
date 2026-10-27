@@ -771,6 +771,67 @@ SLIDE_SECONDS = 0.03      # a slide this long into or out of a note is left out
 MIN_TRIMMED_SECONDS = 0.1 # unless the note would be shorter than this
 
 
+LEAD_SILENCE_SECONDS = 0.15  # silence longer than a consonant before a syllable
+BREATH_SECONDS = 0.2         # a breath between the voice heard and the syllable
+STRAY_START_SECONDS = 0.3    # voice before such a breath is the line before
+
+
+def start_with_voice(notes, track, gap, beat_seconds):
+    """Starts each syllable where its voice starts: the word timings often
+    begin a line in the music before it, or on the last held note of the
+    line before and a breath. A syllable with nothing sung of its own, right
+    before its held "~", gives its text to that note."""
+    import numpy as np
+    out = []
+    for i, note in enumerate(notes):
+        if note.is_continuation:
+            out.append(note)
+            continue
+        a = int((gap + note.start * beat_seconds) / PITCH_FRAME)
+        b = int((gap + note.end * beat_seconds) / PITCH_FRAME)
+        voiced = ~np.isnan(track[max(0, a):max(0, b)])
+        first = 0
+        while first < len(voiced) and not voiced[first]:
+            first += 1
+        if first * PITCH_FRAME < LEAD_SILENCE_SECONDS:
+            first = 0
+        # a short bit of voice and a breath: the line before, not this syllable
+        while True:
+            end = first
+            while end < len(voiced) and voiced[end]:
+                end += 1
+            after = end
+            while after < len(voiced) and not voiced[after]:
+                after += 1
+            if (end - first) * PITCH_FRAME < STRAY_START_SECONDS and \
+               (after - end) * PITCH_FRAME >= BREATH_SECONDS and after < len(voiced):
+                first = after
+            else:
+                break
+        if first == 0 and voiced.any():
+            out.append(note)
+            continue
+        start = note.start + int(round(first * PITCH_FRAME / beat_seconds))
+        if (note.end - start) * beat_seconds < MIN_TRIMMED_SECONDS or not voiced[first:].any():
+            following = notes[i + 1] if i + 1 < len(notes) else None
+            if following is not None and following.is_continuation and \
+               (following.start - note.end) * beat_seconds <= 0.1:
+                # sung on the held note: the syllable starts there
+                following.text = note.text.rstrip() + following.text.strip()[1:] + \
+                    (" " if following.ends_word or note.ends_word else "")
+                if voiced[first:].any() and start < following.start:
+                    following.length += following.start - start
+                    following.start = start
+                continue
+            out.append(note)
+            continue
+        if start > note.start:
+            note.length = note.end - start
+            note.start = start
+        out.append(note)
+    return out
+
+
 def trim_to_steady(notes, track, gap, beat_seconds):
     """Starts each note where the voice reaches its pitch and ends it where
     the voice leaves it: the slides into and out of a note are not that
@@ -826,6 +887,7 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
                 trim_line_end(line[-1][-1], voiced, gap_ms / 1000.0, beat_seconds)
     # the pitch of each note, once it is where it is sung
     if pitch_track is not None:
+        merged = start_with_voice(merged, pitch_track, gap_ms / 1000.0, beat_seconds)
         sung_pitches(merged, pitch_track, gap_ms / 1000.0, beat_seconds)
         fold_octaves(merged)
         merged = drop_stray_notes(merged, levels, gap_ms / 1000.0, beat_seconds)
