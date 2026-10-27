@@ -136,6 +136,7 @@ type
       fAudioBufferSize: integer;
       fAudioBuffer:     PByte;
       fAudioBufferFrame: PAVFrame;
+      fPlanarFormat: integer; // planar format the game interleaves itself, -1 = none
 
       fFilename: IPath;
 
@@ -156,6 +157,8 @@ type
       procedure ResumeParser();
 
       function DecodeFrame(): integer;
+      function FrameFits(): boolean;
+      procedure Interleave(Dest: PByte; FirstSample, Count: integer);
       procedure FlushCodecBuffers();
       procedure FlushSwrContext();
       procedure PauseDecoderUnlocked();
@@ -199,6 +202,11 @@ var
 
 function ParseThreadMain(Data: Pointer): integer; cdecl; forward;
 
+const
+  // planar sample formats of FFmpeg, which the bindings leave out
+  SAMPLE_FMT_S16P = 6;
+  SAMPLE_FMT_FLTP = 8;
+
 function CodecCanFlush(ctx: PAVCodecContext): boolean;
 begin
 {$IF LIBAVCODEC_VERSION < 60000000}
@@ -222,6 +230,7 @@ begin
   fDecoderUnlockedCond := SDL_CreateCond();
   fDecoderResumeCond := SDL_CreateCond();
   fAudioBufferFrame := av_frame_alloc();
+  fPlanarFormat := -1;
 
   Reset();
 end;
@@ -405,7 +414,16 @@ begin
 
   // now initialize the audio-format
   PackedSampleFormat := av_get_packed_sample_fmt(fCodecCtx^.sample_fmt);
-  if ((PackedSampleFormat <> fCodecCtx^.sample_fmt)
+  fPlanarFormat := -1;
+  if (Ord(fCodecCtx^.sample_fmt) = SAMPLE_FMT_FLTP) or (Ord(fCodecCtx^.sample_fmt) = SAMPLE_FMT_S16P) then
+  begin
+    // most codecs (mp3, aac, opus, vorbis) give planar float: interleave it
+    // to 16 bit here. libswresample's converter for it crashed when the
+    // editor jumped around in the song fast
+    fPlanarFormat := Ord(fCodecCtx^.sample_fmt);
+    PackedSampleFormat := AV_SAMPLE_FMT_S16;
+  end
+  else if ((PackedSampleFormat <> fCodecCtx^.sample_fmt)
 
     // BASS expects the audio provided by the decoder to be in 16 bit signed integer or 32 bit float format
     {$IFDEF UseBASSPlayback} or (not ((fCodecCtx^.sample_fmt = AV_SAMPLE_FMT_S16) or (fCodecCtx^.sample_fmt = AV_SAMPLE_FMT_FLT))){$ENDIF}) then
@@ -1279,6 +1297,78 @@ begin
   end;
 end;
 
+procedure TFFmpegDecodeStream.Interleave(Dest: PByte; FirstSample, Count: integer);
+var
+  Channels, C, I: integer;
+  Plane: Pointer;
+  Out: PSmallInt;
+  V: single;
+begin
+  Channels := fFormatInfo.Channels;
+  for C := 0 to Channels - 1 do
+  begin
+    Plane := PPointer(PtrUInt(fAudioBufferFrame.extended_data) + PtrUInt(C) * SizeOf(Pointer))^;
+    Out := PSmallInt(PtrUInt(Dest) + PtrUInt(C) * SizeOf(SmallInt));
+    if fPlanarFormat = SAMPLE_FMT_FLTP then
+      for I := FirstSample to FirstSample + Count - 1 do
+      begin
+        V := PSingle(PtrUInt(Plane) + PtrUInt(I) * SizeOf(Single))^ * 32768;
+        if V > 32767 then
+          V := 32767
+        else if V < -32768 then
+          V := -32768;
+        Out^ := Round(V);
+        Out := PSmallInt(PtrUInt(Out) + PtrUInt(Channels) * SizeOf(SmallInt));
+      end
+    else
+      for I := FirstSample to FirstSample + Count - 1 do
+      begin
+        Out^ := PSmallInt(PtrUInt(Plane) + PtrUInt(I) * SizeOf(SmallInt))^;
+        Out := PSmallInt(PtrUInt(Out) + PtrUInt(Channels) * SizeOf(SmallInt));
+      end;
+  end;
+end;
+
+{*
+ * The decoded frame holds the samples it claims, in the format the converter
+ * was made for. The converter reads nb_samples from every channel, so a
+ * frame that does not would make it read and write outside its buffers.
+ *}
+function TFFmpegDecodeStream.FrameFits(): boolean;
+var
+  SampleFormat: TAVSampleFormat;
+  Planar: boolean;
+  Planes, I: integer;
+  Needed: int64;
+  Reason: string;
+begin
+  SampleFormat := fCodecCtx^.sample_fmt;
+  Planar := av_get_packed_sample_fmt(SampleFormat) <> SampleFormat;
+  if Planar then
+    Planes := fFormatInfo.Channels
+  else
+    Planes := 1;
+  Needed := int64(fAudioBufferFrame.nb_samples) * av_get_bytes_per_sample(SampleFormat);
+  if not Planar then
+    Needed := Needed * fFormatInfo.Channels;
+
+  Reason := '';
+  if fAudioBufferFrame.we_do_not_use_format <> Ord(SampleFormat) then
+    Reason := Format('format %d instead of %d', [fAudioBufferFrame.we_do_not_use_format, Ord(SampleFormat)])
+  else if fAudioBufferFrame.linesize[0] < Needed then
+    Reason := Format('%d bytes for %d samples', [fAudioBufferFrame.linesize[0], fAudioBufferFrame.nb_samples])
+  else if fAudioBufferFrame.extended_data = nil then
+    Reason := 'no data'
+  else
+    for I := 0 to Planes - 1 do
+      if PPointer(PtrUInt(fAudioBufferFrame.extended_data) + PtrUInt(I) * SizeOf(Pointer))^ = nil then
+        Reason := Format('no data in channel %d', [I + 1]);
+
+  Result := Reason = '';
+  if not Result then
+    Log.LogError('Skipped a decoded frame that does not fit: ' + Reason, 'TFFmpegDecodeStream.ReadData');
+end;
+
 function TFFmpegDecodeStream.ReadData(Buffer: PByte; BufferSize: integer): integer;
 var
   CopyByteCount:   integer; // number of bytes to copy
@@ -1310,7 +1400,7 @@ begin
   // set number of bytes to copy to the output buffer
   BufferPos := 0;
 
-  if (fSwrContext <> nil) then
+  if (fSwrContext <> nil) or (fPlanarFormat >= 0) then
   begin
     RemainByteCount := BufferSize mod fBytesPerSample;
     BufferSize := BufferSize - RemainByteCount;
@@ -1370,6 +1460,8 @@ begin
       if (fSwrContext <> nil) then
       begin
         BufferPtr := @Buffer[BufferPos];
+        if not FrameFits() then
+          continue;
         CopyByteCount := swr_convert(fSwrContext, BufferPtr, RemainByteCount div fBytesPerSample,
                                      fAudioBufferFrame.extended_data, fAudioBufferFrame.nb_samples);
         if (CopyByteCount < 0) then
@@ -1387,7 +1479,17 @@ begin
       if (CopyByteCount > RemainByteCount) then
         CopyByteCount := RemainByteCount;
 
-      Move(fAudioBuffer[fAudioBufferPos], Buffer[BufferPos], CopyByteCount);
+      if fPlanarFormat >= 0 then
+      begin
+        if not FrameFits() then
+        begin
+          fAudioBufferPos := fAudioBufferSize;
+          continue;
+        end;
+        Interleave(@Buffer[BufferPos], fAudioBufferPos div fBytesPerSample, CopyByteCount div fBytesPerSample);
+      end
+      else
+        Move(fAudioBuffer[fAudioBufferPos], Buffer[BufferPos], CopyByteCount);
 
       Inc(BufferPos,      CopyByteCount);
       Inc(fAudioBufferPos, CopyByteCount);
