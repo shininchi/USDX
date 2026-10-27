@@ -185,6 +185,7 @@ type
       fIconFiles:     TStringList; // song icon name = file of the current skin
       fSessionRatings: TStringList; // player = rating counts of this session, comma separated
       fCrowns:        TStringList; // player = songs won in a row, for who holds the crown
+      fSessionChickens: TStringList; // player = microphones left with the crown on, this session
       fIconTicks:     integer;
       fLastSave:      TDateTime;
 
@@ -337,6 +338,7 @@ type
       // ratings of the score screen (URatings): counted for this session, and
       // shown with the all-time counts in the guest's achievements
       procedure AddSessionRating(const Player: UTF8String; Rating: integer);
+      procedure AddSessionChicken(const Player: UTF8String);
       function RecordsJSON(const UserId: UTF8String): UTF8String;
       // who won the last song (player=streak), from the score screen
       procedure SetCrowns(List: TStrings);
@@ -385,6 +387,7 @@ const
   CLIP_HEIGHT        = 360;
   THUMB_SIZE         = 240;
   MAX_NICK_LENGTH    = 24;
+  SUNG_TONIGHT_HOURS = 12;
   MAX_FAILED_LOGINS  = 5;
   LOGIN_LOCK_SEC     = 300;
   INI_SECTION        = 'SongRequests';
@@ -827,6 +830,18 @@ begin
   end;
 end;
 
+procedure TSongRequests.AddSessionChicken(const Player: UTF8String);
+begin
+  if Trim(Player) = '' then
+    Exit;
+  fLock.Enter;
+  try
+    fSessionChickens.Values[Trim(Player)] := IntToStr(StrToIntDef(fSessionChickens.Values[Trim(Player)], 0) + 1);
+  finally
+    fLock.Leave;
+  end;
+end;
+
 function TSongRequests.RecordsJSON(const UserId: UTF8String): UTF8String;
 var
   Root: TJSONObject;
@@ -835,11 +850,13 @@ var
   Nick: UTF8String;
   Session: TStringList;
   Total: TRatingCounts;
-  I, Crown, BestStreak: integer;
+  I, Crown, BestStreak, Chickens, SessionChickens: integer;
 begin
   Nick := '';
   Crown := 0;
   BestStreak := 0;
+  Chickens := 0;
+  SessionChickens := 0;
   Session := TStringList.Create;
   Root := TJSONObject.Create;
   try
@@ -852,6 +869,7 @@ begin
       begin
         Session.CommaText := fSessionRatings.Values[Nick];
         Crown := StrToIntDef(fCrowns.Values[Nick], 0);
+        SessionChickens := StrToIntDef(fSessionChickens.Values[Nick], 0);
       end;
     finally
       fLock.Leave;
@@ -864,6 +882,7 @@ begin
     begin
       Total := StoredRatings(fScoreFile.ToUTF8, Nick);
       BestStreak := StoredBestStreak(fScoreFile.ToUTF8, Nick);
+      Chickens := StoredChickens(fScoreFile.ToUTF8, Nick);
     end;
 
     List := TJSONArray.Create;
@@ -873,6 +892,7 @@ begin
     Root.Add('ratings', List);
     Root.Add('crown', Crown);           // songs won in a row now, 0 = no crown
     Root.Add('bestStreak', BestStreak);
+    Root.Add('chicken', TJSONObject.Create(['total', Chickens, 'session', SessionChickens]));
     Result := Root.AsJSON;
   finally
     Root.Free;
@@ -959,6 +979,8 @@ begin
   fSessionRatings.CaseSensitive := false;
   fCrowns := TStringList.Create;
   fCrowns.CaseSensitive := false;
+  fSessionChickens := TStringList.Create;
+  fSessionChickens.CaseSensitive := false;
   fClipJobs := TStringList.Create;
   fClipFailed := TStringList.Create;
   fClipEvent := TEvent.Create(nil, false, false, '');
@@ -999,6 +1021,7 @@ begin
   fIconFiles.Free;
   fSessionRatings.Free;
   fCrowns.Free;
+  fSessionChickens.Free;
   if fDirty then
     SaveState;
   fQueue.Free;
@@ -1934,6 +1957,8 @@ begin
   Result.Add('best', fStats[Index].BestScore);
   Result.Add('bestPlayer', fStats[Index].BestPlayer);
   Result.Add('requests', RequestCount(fSongs[Index].Key));
+  // sung tonight: the page marks it, to pick another one
+  Result.Add('sung', UnixNow - StrToInt64Def(fLastSung.Values[fSongs[Index].Key], 0) < SUNG_TONIGHT_HOURS * 3600);
   Request := FindRequest(fSongs[Index].Key);
   if Request <> nil then
   begin

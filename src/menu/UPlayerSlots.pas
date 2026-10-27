@@ -34,6 +34,10 @@ unit UPlayerSlots;
  * in which another tap cancels. Outside the songs, two taps listen to the
  * player (UVoiceCommands): a nickname takes the microphone, a goodbye
  * frees it; in the song selection three taps start the selected song.
+ *
+ * A crown holder whose name leaves the microphones (a goodbye, the web
+ * page, the names screen aside) is a chicken, counted with the ratings
+ * once per crown; the crown and the streak stay.
  *}
 
 interface
@@ -87,6 +91,7 @@ const
   SERIES_MS    = 1500; // "x3" shown over the box after a series
   LEAVE_MS     = 3000; // time to cancel leaving the song
   VOICE_MS     = 3000; // the answer to a voice command stays this long
+  CHICKEN_MS   = 5000; // the chicken shows this long
   // names wider than their room scroll to the end and start over
   SCROLL_SPEED = 30;   // pixels per second
   SCROLL_WAIT  = 1200; // ms still at the start and at the end
@@ -101,6 +106,10 @@ var
   RestartedAt:  cardinal;  // SDL ticks of the last capture restart
   MicsSentAt:   cardinal;  // SDL ticks when the web pages got the microphones
   CaptureOurs:  boolean;   // the song selection started the capture
+  MicNames:     TStringList; // names on the microphones at the last look
+  Chickens:     TStringList; // player = streak of the crown they were a chicken with
+  ChickenName:  UTF8String;
+  ChickenAt:    cardinal;  // SDL ticks of the last chicken, 0 = none
 
 // ms since Ticks; 0 when Ticks is newer (set by another thread) - plain
 // cardinal subtraction would raise an overflow error then
@@ -169,6 +178,9 @@ begin
     Streaks := TStringList.Create;
     Streaks.CaseSensitive := false;
   end;
+  // new crowns: each can make a chicken again
+  if Chickens <> nil then
+    Chickens.Clear;
   Crowns := TStringList.Create;
   try
     for I := 0 to High(Winner) do
@@ -207,6 +219,51 @@ begin
       SongRequests.SetCrowns(Crowns);
   finally
     Crowns.Free;
+  end;
+end;
+
+// a crown holder left the microphones: chicken
+procedure CheckChickens;
+var
+  Now: TStringList;
+  I: integer;
+  Name, Streak: UTF8String;
+begin
+  Now := TStringList.Create;
+  Now.CaseSensitive := false;
+  try
+    for I := 0 to ConfiguredPlayers - 1 do
+      if not IsDefaultName(Ini.Name[I]) then
+        Now.Add(Trim(Ini.Name[I]));
+    if Chickens = nil then
+    begin
+      Chickens := TStringList.Create;
+      Chickens.CaseSensitive := false;
+    end;
+    // the names screen changes the names by hand
+    if (MicNames <> nil) and (Streaks <> nil) and (Display.CurrentScreen <> @ScreenName) then
+      for I := 0 to Streaks.Count - 1 do
+      begin
+        Name := Streaks.Names[I];
+        Streak := Streaks.ValueFromIndex[I];
+        if (Copy(Name, 1, 1) = '#') or (StrToIntDef(Streak, 0) < 1) or
+           (MicNames.IndexOf(Name) < 0) or (Now.IndexOf(Name) >= 0) or
+           (Chickens.Values[Name] = Streak) then
+          Continue;
+        Log.LogStatus(Format('%s left the microphone with the crown: chicken', [Name]), 'MicTaps');
+        RecordChicken(Name);
+        Chickens.Values[Name] := Streak;
+        ChickenName := Name;
+        ChickenAt := SDL_GetTicks;
+      end;
+    if MicNames = nil then
+    begin
+      MicNames := TStringList.Create;
+      MicNames.CaseSensitive := false;
+    end;
+    MicNames.Assign(Now);
+  finally
+    Now.Free;
   end;
 end;
 
@@ -351,6 +408,7 @@ var
   Event:   TMicTapEvent;
 begin
   SyncWebMics;
+  CheckChickens;
 
   if AudioInput = nil then
     Exit;
@@ -635,6 +693,53 @@ begin
   PrintText(Text);
 end;
 
+// a round white chicken face with dots as eyes, a red comb and an orange
+// beak, like the monkey of the ratings
+procedure DrawChickenFace(CX, CY, R: single);
+var
+  I: integer;
+begin
+  Renderer.DepthTest := false;
+  // comb: three red balls on the top
+  for I := -1 to 1 do
+    DrawDisc(CX + I * R * 0.38, CY - R * 0.92 + Abs(I) * R * 0.14, R * 0.3, 0.86, 0.15, 0.15);
+  // head with a dark outline
+  DrawDisc(CX, CY, R + 1.5, 0.2, 0.12, 0.02);
+  DrawDisc(CX, CY, R, 1.0, 0.97, 0.9);
+  // eyes
+  DrawDisc(CX - R * 0.36, CY - R * 0.18, R * 0.13, 0.05, 0.05, 0.05);
+  DrawDisc(CX + R * 0.36, CY - R * 0.18, R * 0.13, 0.05, 0.05, 0.05);
+  // beak, and the red wattle under it
+  Renderer.DrawTriangle(CX - R * 0.26, CY + R * 0.08, CX + R * 0.26, CY + R * 0.08,
+    CX, CY + R * 0.46, 0, 0.98, 0.62, 0.1, 1);
+  DrawDisc(CX - R * 0.08, CY + R * 0.5, R * 0.11, 0.86, 0.15, 0.15);
+  DrawDisc(CX + R * 0.08, CY + R * 0.5, R * 0.11, 0.86, 0.15, 0.15);
+end;
+
+// the chicken of the last crown holder who left the microphone
+procedure DrawChicken(Y: single);
+var
+  Text: UTF8String;
+  Alpha, W: single;
+begin
+  if (ChickenAt = 0) or (Elapsed(ChickenAt) >= CHICKEN_MS) then
+    Exit;
+  Alpha := Min(1, (CHICKEN_MS - Elapsed(ChickenAt)) / 500);
+  Text := Format(Language.Translate('MICTAPS_CHICKEN'), [ChickenName]);
+  SetFontFamily(0);
+  SetFontStyle(ftBold);
+  SetFontItalic(false);
+  SetFontSize(18);
+  W := TextWidth(Text) + 64;
+  Renderer.DepthTest := false;
+  Renderer.DrawQuad(16, Y, 0, W, 44, 0.05, 0.05, 0.1, 0.85 * Alpha);
+  Renderer.DrawQuad(16, Y, 0, 4, 44, 0.98, 0.62, 0.1, Alpha);
+  DrawChickenFace(42, Y + 24, 14);
+  SetFontColor(1, 1, 1, Alpha);
+  SetFontPos(68, Y + 11);
+  PrintText(Text);
+end;
+
 procedure PlayerSlotsDraw;
 var
   DX, DY:   integer;
@@ -648,6 +753,13 @@ var
   DepthTest: boolean;
 begin
   DrawLeaveNotice;
+  if Display.CurrentScreen = @ScreenSing then
+  begin
+    // dropped with the song paused
+    DepthTest := Renderer.DepthTest;
+    DrawChicken(RenderH - ROW_OFFSET - 120);
+    Renderer.DepthTest := DepthTest;
+  end;
   if (Display.CurrentScreen <> @ScreenSong) or (Display.NextScreen <> nil) then
     Exit;
 
@@ -738,6 +850,7 @@ begin
   end;
 
   DrawVoice(Y - 66, Ticks);
+  DrawChicken(Y - 120);
 
   Renderer.DepthTest := DepthTest;
 end;

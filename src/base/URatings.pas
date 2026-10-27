@@ -54,6 +54,9 @@ function StoredRatings(const DBFile, Player: UTF8String): TRatingCounts;
 // winning streaks (songs won in a row): keeps a player's best one
 procedure RecordStreak(const Player: UTF8String; Streak: integer);
 function StoredBestStreak(const DBFile, Player: UTF8String): integer;
+// the chicken: leaving the microphone with the crown on
+procedure RecordChicken(const Player: UTF8String);
+function StoredChickens(const DBFile, Player: UTF8String): integer;
 
 implementation
 
@@ -68,6 +71,7 @@ uses
 const
   RATINGS_TABLE = 'us_player_ratings';
   STREAKS_TABLE = 'us_player_streaks';
+  CHICKENS_TABLE = 'us_player_chickens';
 
 function RatingOf(Score: integer): integer;
 begin
@@ -222,6 +226,63 @@ begin
     except
       on E: Exception do
         Log.LogWarn('Could not read the streak: ' + E.Message, 'URatings');
+    end;
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure RecordChicken(const Player: UTF8String);
+var
+  DB: TSQLiteDatabase;
+begin
+  if IsDefaultName(Player) then
+    Exit;
+  DB := nil;
+  try
+    try
+      DB := TSQLiteDatabase.Create(Platform.GetGameUserPath.Append('Ultrastar.db').ToUTF8);
+      DB.SetTimeout(1000);
+      DB.ExecSQL('CREATE TABLE IF NOT EXISTS [' + CHICKENS_TABLE + '] (' +
+        '[Player] TEXT NOT NULL COLLATE NOCASE PRIMARY KEY, [Count] INTEGER NOT NULL DEFAULT 0)');
+      DB.ExecSQL(Format('INSERT INTO [%s] ([Player], [Count]) VALUES (%s, 1) ' +
+        'ON CONFLICT ([Player]) DO UPDATE SET [Count] = [Count] + 1',
+        [CHICKENS_TABLE, Quoted(Trim(Player))]));
+    except
+      on E: Exception do
+        Log.LogError('Could not save the chicken: ' + E.Message, 'URatings');
+    end;
+  finally
+    DB.Free;
+  end;
+  if SongRequests <> nil then
+    SongRequests.AddSessionChicken(Trim(Player));
+end;
+
+function StoredChickens(const DBFile, Player: UTF8String): integer;
+var
+  DB: TSQLiteDatabase;
+  Table: TSQLiteUniTable;
+begin
+  Result := 0;
+  DB := nil;
+  try
+    try
+      DB := TSQLiteDatabase.Create(DBFile);
+      DB.SetTimeout(500);
+      if not DB.TableExists(CHICKENS_TABLE) then
+        Exit;
+      Table := DB.GetUniTable(Format('SELECT [Count] FROM [%s] WHERE [Player] = %s',
+        [CHICKENS_TABLE, Quoted(Trim(Player))]));
+      try
+        if not Table.EOF then
+          Result := Table.FieldAsInteger(0);
+      finally
+        Table.Free;
+      end;
+    except
+      on E: Exception do
+        Log.LogWarn('Could not read the chickens: ' + E.Message, 'URatings');
     end;
   finally
     DB.Free;

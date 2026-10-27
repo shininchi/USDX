@@ -158,11 +158,17 @@ function songTags(song) {
   return el('div', { class: 'tags' }, tags);
 }
 
+// a green check on the songs sung tonight, to pick a new one
+function sungMark() {
+  return el('span', { class: 'sung-mark', title: t('sung_tonight'), 'aria-label': t('sung_tonight'), text: '✓' });
+}
+
 function songNode(song) {
   const cover = coverNode(song);
   if (song.queuePos) cover.append(el('span', { class: 'queued-mark', text: `#${song.queuePos}` }));
+  if (song.sung && state.view !== 'text') cover.append(sungMark());
   const meta = el('div', { class: 'meta' },
-    el('div', { class: 'title', text: song.title }),
+    el('div', { class: 'title' }, state.view === 'text' && song.sung ? sungMark() : null, song.title),
     el('div', { class: 'artist', text: song.artist }),
     state.view === 'text' && song.queuePos ? el('span', { class: 'queued-text', text: `#${song.queuePos}` }) : null,
     state.view === 'list' ? songTags(song) : null);
@@ -803,6 +809,14 @@ async function refreshRecords() {
       el('div', { class: 'record-count', text: got ? `×${r.total}` : t('records_never') }),
       r.session ? el('div', { class: 'record-session', text: t('records_session', r.session) }) : null);
   });
+  // the chicken: leaving the microphone with the crown on
+  const chicken = data.chicken || { total: 0, session: 0 };
+  tiles.push(el('div', { class: `record chicken${chicken.total > 0 ? ' got' : ''}`, title: t('chicken_text') },
+    el('img', { src: '/assets/chicken.svg', alt: '' }),
+    el('div', { class: 'record-name', text: t('chicken') }),
+    el('div', { class: 'record-count', text: chicken.total > 0 ? `×${chicken.total}` : t('records_never') }),
+    chicken.session ? el('div', { class: 'record-session', text: t('records_session', chicken.session) }) : null,
+    el('div', { class: 'record-hint', text: t('chicken_text') })));
   const streak = el('div', { class: 'streak' },
     crownIcon(),
     el('div', {},
@@ -810,12 +824,13 @@ async function refreshRecords() {
       el('div', { class: 'summary', text: data.bestStreak ? t('streak_songs', data.bestStreak) : t('streak_none') })),
     data.bestStreak ? el('div', { class: 'record-count', text: `×${data.bestStreak}` }) : null);
   if (!data.bestStreak) streak.classList.add('none');
-  $('records').replaceChildren(
+  // replaceChildren would print a missing crown as "null"
+  $('records').replaceChildren(...[
     el('h2', { class: 'records-title' }, t('records_title', data.nick), data.crown ? crownLabel(data.crown) : null),
     data.crown ? el('p', { class: 'crown-now', text: t('crown_now', data.crown) }) : null,
     el('p', { class: 'summary', text: t('records_text') }),
     streak,
-    el('div', { class: 'records-grid' }, tiles));
+    el('div', { class: 'records-grid' }, tiles)].filter(Boolean));
 }
 
 // ---------- sharing the page (tap the logo) ----------
@@ -916,6 +931,8 @@ let nowPlaying = null;
 function renderNowPlaying(now) {
   const box = $('nowPlaying');
   const sameSong = now && nowPlaying && now.startedAt === nowPlaying.startedAt;
+  // a song ended: its check shows in the list
+  if (nowPlaying && !sameSong) loadSongs(true);
   nowPlaying = now;
   if (!now) {
     box.classList.add('hidden');
