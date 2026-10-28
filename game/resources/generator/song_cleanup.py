@@ -728,6 +728,9 @@ def letters_of(text):
     return [c for c in text.lower() if c.isalnum()]
 
 
+LETTER_SLACK_SECONDS = 0.15  # a letter heard this far outside its syllable's room is moved in
+
+
 def place_syllables_by_letters(notes, letters, gap, beat_seconds):
     """Starts each syllable inside a word when WhisperX heard its first
     letter, instead of sharing the word's time evenly among its syllables
@@ -761,8 +764,14 @@ def place_syllables_by_letters(notes, letters, gap, beat_seconds):
                 continue
             new = int(round((known[0] - gap) / beat_seconds))
             prev, cur = sylls[i - 1], sylls[i]
+            earliest = prev[-1].start + min_beats
             latest = cur[0].end - min_beats if len(cur) == 1 else cur[1].start - min_beats
-            new = max(prev[-1].start + min_beats, min(latest, new))
+            # a letter heard far outside the syllable's room is WhisperX
+            # losing the word ("mierda" with its d 6 s later): keep the split
+            if (new - latest) * beat_seconds > LETTER_SLACK_SECONDS or \
+               (earliest - new) * beat_seconds > LETTER_SLACK_SECONDS:
+                continue
+            new = max(earliest, min(latest, new))
             if new == cur[0].start:
                 continue
             end = cur[0].end
