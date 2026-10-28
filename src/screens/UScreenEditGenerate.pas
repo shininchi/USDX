@@ -349,6 +349,8 @@ begin
       gsDone:
         if SongGenerator.LyricsSource = 'lrclib' then
           StartText := Language.Translate('SING_EDIT_GENERATE_DONE_LRCLIB')
+        else if SongGenerator.LyricsSource = 'lrcmux' then
+          StartText := Language.Translate('SING_EDIT_GENERATE_DONE_LRCMUX')
         else if SongGenerator.LyricsSource = 'user' then
           StartText := Language.Translate('SING_EDIT_GENERATE_DONE_USER')
         else

@@ -58,7 +58,7 @@ type
       fThread:    TThread;
       fState:     TGeneratorState;
       fStage:     UTF8String;
-      fLyricsSource: UTF8String; // where the lyrics came from: user, lrclib, whisper
+      fLyricsSource: UTF8String; // where the lyrics came from: user, lrclib, lrcmux, whisper
       fMessage:   UTF8String;
       fResult:    UTF8String;  // txt written by the generator
       fReplace:   UTF8String;  // txt whose notes are replaced, empty = new song

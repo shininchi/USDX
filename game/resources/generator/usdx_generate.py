@@ -65,9 +65,12 @@ LANGUAGE_CODES = {
 
 CHILD = None
 
-# what placed the lines of the song: LRCLIB's synced times, or where
-# Whisper heard them (no synced lyrics, or they fit nowhere); #COMMENT says
+# what placed the lines of the song: the synced times of the lyrics
+# found online, or where Whisper heard them (no synced lyrics, or they fit
+# nowhere); #COMMENT says
 PLACED_BY = "Whisper"
+# who had the lyrics found online: LRCLIB, or the site lrcmux took them from
+LYRICS_FROM = "LRCLIB"
 
 
 def stop(_signum, _frame):
@@ -83,28 +86,29 @@ def say(line):
 
 LYRICS_FILES = ("letra.txt", "lyrics.txt")
 LRCLIB = "https://lrclib.net/api/"
+LRCMUX = "https://api.lrcmux.dev/"
 LRCLIB_AGENT = "USDX song generator (https://github.com/shininchi/USDX)"
 
 
-def lrclib_request(path, params):
+def lrclib_request(path, params, api=LRCLIB, name="LRCLIB"):
     """JSON from LRCLIB's public API (None on errors), retrying when busy."""
-    url = LRCLIB + path + "?" + urllib.parse.urlencode(params)
-    for attempt in range(3):
+    url = api + path + "?" + urllib.parse.urlencode(params)
+    for attempt in range(5):
         try:
             request = urllib.request.Request(url, headers={"User-Agent": LRCLIB_AGENT})
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=30) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
             if e.code not in (429, 500, 502, 503, 504):
-                print("LRCLIB: %s" % e, flush=True)
+                print("%s: %s" % (name, e), flush=True)
                 return None
         except Exception as e:
-            print("LRCLIB: %s" % e, flush=True)
+            print("%s: %s" % (name, e), flush=True)
             return None
         time.sleep(2 + 3 * attempt)
-    print("LRCLIB is busy", flush=True)
+    print("%s is busy" % name, flush=True)
     return None
 
 
@@ -119,39 +123,93 @@ def audio_seconds(path, ffmpeg_dir):
 
 
 def fetch_lyrics(artist, title, seconds, folder):
+    """The song's lyrics from LRCLIB (https://lrclib.net), or else from the
+    sites lrcmux looks in, saved in folder; None if not found."""
+    title = without_track_number(title)
+    return lrclib_lyrics(artist, title, seconds, folder) or lrcmux_lyrics(artist, title, seconds, folder)
+
+
+def save_lrc(folder, text, length):
+    """Lyrics saved as an LRC file, with the length of the recording its
+    synced times are for ("[length: 03:58]"), to know if it is this one."""
+    path = os.path.join(folder, "online.lyrics.txt")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        if length and re.search(r"^\[\d+:\d", text, re.MULTILINE):
+            minutes, rest = divmod(float(length), 60)
+            f.write("[length: %02d:%05.2f]\n" % (minutes, rest))
+        f.write(text.strip() + "\n")
+    return path
+
+
+def lrcmux_lyrics(artist, title, seconds, folder):
+    """The song's lyrics from lrcmux (https://lrcmux.dev), which looks in
+    YouTube Music and Genius and has many songs LRCLIB lacks; synced by
+    line when there are. KuGou's are left out: they hide swear words."""
+    global LYRICS_FROM
+    params = {"artist": artist, "title": title, "level": "line", "sources": "!lrclib,!kugou"}
+    if seconds:
+        params["duration"] = int(round(seconds))
+    found = lrclib_request("get", params, LRCMUX, "lrcmux")
+    lines = (found or {}).get("lines") or []
+    if not lines:
+        return None
+    text = []
+    for n, line in enumerate(lines):
+        if line.get("start") is None:
+            text.append(line.get("text", ""))
+            continue
+        text.append("[%s] %s" % (lrc_time(line["start"]), line.get("text", "")))
+        # an empty timed line where the singing stops before the next one
+        end, next_start = line.get("end"), lines[n + 1].get("start") if n + 1 < len(lines) else None
+        if end is not None and (next_start is None or next_start - end > 50):
+            text.append("[%s]" % lrc_time(end))
+    track = found.get("track") or {}
+    source = ((found.get("meta") or {}).get("source") or {}).get("name") or "lrcmux"
+    LYRICS_FROM = source
+    path = save_lrc(folder, "\n".join(text), track.get("duration"))
+    print("Lyrics from %s via lrcmux (%s): %s - %s" % (source, (found.get("meta") or {}).get("level"),
+                                                      track.get("artist"), track.get("title")), flush=True)
+    return path
+
+
+def lrc_time(ms):
+    minutes, rest = divmod(ms / 1000.0, 60)
+    return "%02d:%05.2f" % (minutes, rest)
+
+
+def lrclib_lyrics(artist, title, seconds, folder):
     """The song's lyrics from LRCLIB (https://lrclib.net), the synced ones
     ("[mm:ss.xx] line") when there are, saved in folder; None if not found."""
+    global LYRICS_FROM
     found = None
     if seconds:
         found = lrclib_request("get", {"artist_name": artist, "track_name": title,
                                        "duration": int(round(seconds))})
-    if not found:
-        results = lrclib_request("search", {"artist_name": artist, "track_name": title}) or []
-        # the same song: the closest length, within a few seconds
-        results = [r for r in results if r.get("plainLyrics") or r.get("syncedLyrics")]
-        if seconds:
-            results = [r for r in results if abs((r.get("duration") or 0) - seconds) <= 8]
-            results.sort(key=lambda r: abs((r.get("duration") or 0) - seconds))
-        found = results[0] if results else None
-    if not found or found.get("instrumental"):
+    if found and found.get("instrumental"):
         return None
-    if not found.get("syncedLyrics"):
-        # synced lyrics of another version (a videoclip, longer or shorter)
-        # still place the lines: lyrics_hook moves them to fit this one, or
-        # leaves them out when they do not fit
-        synced = [r for r in lrclib_request("search", {"artist_name": artist, "track_name": title}) or []
-                  if r.get("syncedLyrics") and not r.get("instrumental")]
+    if not found or not found.get("syncedLyrics"):
+        results = [r for r in lrclib_request("search", {"artist_name": artist, "track_name": title}) or []
+                   if (r.get("plainLyrics") or r.get("syncedLyrics")) and not r.get("instrumental")]
         if seconds:
-            synced = [r for r in synced if abs((r.get("duration") or 0) - seconds) <= 30]
-            synced.sort(key=lambda r: abs((r.get("duration") or 0) - seconds))
-        if synced:
+            results.sort(key=lambda r: abs((r.get("duration") or 0) - seconds))
+        # the same song: the closest length, within a few seconds
+        close = [r for r in results if not seconds or abs((r.get("duration") or 0) - seconds) <= 8]
+        if not found and close:
+            found = close[0]
+        # synced lyrics of another version (a videoclip, a long silent
+        # ending) still place the lines: lyrics_hook moves them to fit this
+        # one, or leaves them out when they do not fit
+        synced = [r for r in results if r.get("syncedLyrics")
+                  and (not seconds or abs((r.get("duration") or 0) - seconds) <= 30)]
+        if synced and not (found and found.get("syncedLyrics")):
             found = synced[0]
+    if not found:
+        return None
     text = found.get("syncedLyrics") or found.get("plainLyrics")
     if not text:
         return None
-    path = os.path.join(folder, "lrclib.lyrics.txt")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text.strip() + "\n")
+    LYRICS_FROM = "LRCLIB"
+    path = save_lrc(folder, text, found.get("duration"))
     print("Lyrics from LRCLIB (%s): %s - %s" % ("synced" if found.get("syncedLyrics") else "plain",
                                                found.get("artistName"), found.get("trackName")), flush=True)
     return path
@@ -162,7 +220,7 @@ def plain_lyrics(path):
     lines = []
     for line in read_text(path).splitlines():
         line = re.sub(r"^(\[\d+:\d+(?:[.:]\d+)?\])+", "", line).strip()
-        if line:
+        if line and not re.fullmatch(r"\[length:[^\]]*\]", line, re.IGNORECASE):
             lines.append(line)
     return lines
 
@@ -307,7 +365,7 @@ def run_ultrasinger(args, out_dir, language, lyrics):
         if "Calculating Ultrastar Points" in line:
             song_written = True
         if "lines placed by their synced times" in line:  # lyrics_hook
-            PLACED_BY = "LRCLIB"
+            PLACED_BY = LYRICS_FROM
         for text, stage in STAGES:
             if text in line and stage != last:
                 last = stage
@@ -404,8 +462,15 @@ def tags_of(path, ffmpeg_dir):
     except Exception:
         return None
     if tags.get("artist") and tags.get("title"):
-        return tags["artist"], tags["title"]
+        return tags["artist"], without_track_number(tags["title"])
     return None
+
+
+def without_track_number(title):
+    """A title without the track number some files carry in it ("05 - Con
+    un Solo Dedo", "3. Rocíos"), which no lyrics site has; a title that is
+    only a number ("1999") stays."""
+    return re.sub(r"^\d{1,3}\s*[-.–—]\s+(?=\S)", "", title).strip() or title
 
 
 def name_from_file(path, ffmpeg_dir=None):
@@ -426,6 +491,20 @@ def name_from_file(path, ffmpeg_dir=None):
 # what video sites add to a song's name: "(Official Video)", "[Videoclip]"
 VIDEO_TAGS = re.compile(r"\s*[\(\[][^\)\]]*(official|oficial|video|v[ií]deo|clip|lyric|letra|audio|"
                         r"visuali[sz]er|hd|4k|remaster)[^\)\]]*[\)\]]", re.IGNORECASE)
+
+
+def one_video(url):
+    """The video alone of a link that also names its playlist ("watch?v=X
+    &list=RD...", a YouTube Mix): the download would go through the whole
+    playlist instead, until YouTube stops it for too many requests."""
+    if not re.match(r"https?://", url):
+        return url
+    parts = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    if not any(k == "v" for k, _ in query) and parts.netloc != "youtu.be":
+        return url
+    query = [(k, v) for k, v in query if k not in ("list", "index", "start_radio", "pp")]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
 
 
 def name_from_url(url):
@@ -457,9 +536,9 @@ def name_from_url(url):
 
 def lyrics_origin(source, lyrics):
     """Where the lyrics came from, for the comment of the song."""
-    if source == "lrclib":
+    if source in ("lrclib", "lrcmux"):
         synced = any(re.match(r"\[\d+:\d", l) for l in read_text(lyrics).splitlines())
-        return "letra de LRCLIB, sincronizada" if synced else "letra de LRCLIB, sin tiempos"
+        return "letra de %s, %s" % (LYRICS_FROM, "sincronizada" if synced else "sin tiempos")
     if source == "user":
         return "letra de letra.txt"
     return "letra oída por Whisper"
@@ -679,6 +758,7 @@ def main():
     args = p.parse_args()
     if not args.out and not args.replace:
         p.error("--out or --replace is needed")
+    args.input = one_video(args.input)
     signal.signal(signal.SIGTERM, stop)
 
     work_parent = os.path.dirname(args.replace) if args.replace else args.out
@@ -689,7 +769,7 @@ def main():
         language = song_language(args.replace) if args.replace else None
         if not language:
             language = language_code(args.language)
-        # the lyrics: a file next to the song (corrected by hand), or LRCLIB's
+        # the lyrics: a file next to the song (corrected by hand), or online
         lyrics = find_lyrics(args)
         source = "user" if lyrics else "whisper"
         if not lyrics and not args.no_lrclib:
@@ -710,7 +790,7 @@ def main():
                     seconds = audio_seconds(args.input, args.ffmpeg)
                 lyrics = fetch_lyrics(names[0], names[1], seconds, work)
                 if lyrics:
-                    source = "lrclib"
+                    source = "lrclib" if LYRICS_FROM == "LRCLIB" else "lrcmux"
         say("@@LYRICS " + source)
         try:
             run_ultrasinger(args, work, language, lyrics)
@@ -747,8 +827,8 @@ def main():
             result = os.path.join(target, os.path.basename(txt))
             if source == "user":
                 shutil.copy2(lyrics, os.path.join(target, LYRICS_FILES[0]))
-        if source == "lrclib" and not lyrics_in(os.path.dirname(result)):
-            # LRCLIB's lyrics, to be corrected by hand if needed
+        if source in ("lrclib", "lrcmux") and not lyrics_in(os.path.dirname(result)):
+            # the lyrics found online, to be corrected by hand if needed
             with open(os.path.join(os.path.dirname(result), LYRICS_FILES[0]), "w",
                       encoding="utf-8", newline="\n") as f:
                 f.write("\n".join(plain_lyrics(lyrics)) + "\n")

@@ -57,6 +57,21 @@ def read_timed_lyrics(path):
     return result
 
 
+LRC_LENGTH = re.compile(r"^\[length:\s*(\d+):(\d+(?:\.\d+)?)\]", re.IGNORECASE)
+SAME_RECORDING_SECONDS = 2.0
+
+
+def lyrics_length(path):
+    """Length of the recording the synced times are for ("[length: 03:58]"
+    in the LRC file), None if it does not say."""
+    data = open(path, "rb").read().decode("utf-8", errors="replace")
+    for line in data.splitlines():
+        match = LRC_LENGTH.match(line.strip())
+        if match:
+            return int(match.group(1)) * 60 + float(match.group(2))
+    return None
+
+
 def read_lyrics(path):
     return [text for _, text in read_timed_lyrics(path) if text]
 
@@ -141,13 +156,18 @@ def line_starts(lines, heard):
     return starts
 
 
-def fitted_times(timed, segments):
+def fitted_times(timed, segments, same_recording=False):
     """Synced times moved to fit this recording. LRCLIB has them for one
     version of the song, and another one (a videoclip) may have a longer
     intro or an extra bit in the middle: the song is cut in stretches with
     one shift each, which the lines Whisper heard tell. Whisper is only
     asked how far the lines are, never where each one goes. None when the
-    times do not fit the recording at all."""
+    times do not fit the recording at all.
+
+    The same recording (as long as the one the times are for) has nothing
+    added in the middle: one shift for the whole song. Whisper matching a
+    repeated chorus to another repetition cut Esa Estrella in two
+    stretches, the second one 1.8 s early."""
     heard = heard_words(segments)
     entries = [k for k, (start, text) in enumerate(timed) if text]
     starts = line_starts([timed[k][1] for k in entries], heard) if heard else []
@@ -165,6 +185,8 @@ def fitted_times(timed, segments):
             blocks.append([m])
         else:
             blocks[-1].append(m)
+    if same_recording:
+        blocks = [list(range(len(deltas)))]
     # a stretch of one or two lines is Whisper being wrong, not the song
     merged = []
     for block in blocks:
@@ -393,6 +415,7 @@ def trim_line_edges(aligned, levels, audio=None):
 def install(lyrics_path):
     import whisperx
     timed = read_timed_lyrics(lyrics_path)
+    length = lyrics_length(lyrics_path)
     lines = [text for _, text in timed if text]
     original_align = whisperx.align
 
@@ -405,7 +428,8 @@ def install(lyrics_path):
     def aligned(segments, model, metadata, audio, *args, **kwargs):
         if lines:
             seconds = len(audio) / 16000.0 if hasattr(audio, "__len__") else None
-            fitted = fitted_times(timed, segments) if timed and all(t is not None for t, _ in timed) else None
+            same = bool(length and seconds and abs(length - seconds) <= SAME_RECORDING_SECONDS)
+            fitted = fitted_times(timed, segments, same) if timed and all(t is not None for t, _ in timed) else None
             placed = fitted and timed_segments(fitted, seconds)
             if placed:
                 result = original_align(placed, model, metadata, audio, *args, **kwargs)
