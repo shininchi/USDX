@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 
@@ -125,7 +126,10 @@ def audio_seconds(path, ffmpeg_dir):
 def fetch_lyrics(artist, title, seconds, folder):
     """The song's lyrics from LRCLIB (https://lrclib.net), or else from the
     sites lrcmux looks in, saved in folder; None if not found."""
-    title = without_track_number(title)
+    # an accent written as a separate mark (as macOS keeps file names and
+    # some tags: "i" + "´") finds nothing
+    artist = unicodedata.normalize("NFC", artist)
+    title = without_track_number(unicodedata.normalize("NFC", title))
     return lrclib_lyrics(artist, title, seconds, folder) or lrcmux_lyrics(artist, title, seconds, folder)
 
 

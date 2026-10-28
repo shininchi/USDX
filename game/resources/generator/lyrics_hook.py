@@ -156,7 +156,7 @@ def line_starts(lines, heard):
     return starts
 
 
-def fitted_times(timed, segments, same_recording=False):
+def fitted_times(timed, segments, same_recording=False, levels=None, audio_seconds=None):
     """Synced times moved to fit this recording. LRCLIB has them for one
     version of the song, and another one (a videoclip) may have a longer
     intro or an extra bit in the middle: the song is cut in stretches with
@@ -167,7 +167,12 @@ def fitted_times(timed, segments, same_recording=False):
     The same recording (as long as the one the times are for) has nothing
     added in the middle: one shift for the whole song. Whisper matching a
     repeated chorus to another repetition cut Esa Estrella in two
-    stretches, the second one 1.8 s early."""
+    stretches, the second one 1.8 s early. Whisper's rough times invent
+    stretches in other songs too (Con un Solo Dedo): they are kept only
+    when their lines start where the voice does clearly better than with
+    one shift for the whole song (levels, of the vocals), and never when
+    they cannot be: lines after the end of the recording, or out of order
+    (Rocíos' second chorus matched to the third one, 47 s later)."""
     heard = heard_words(segments)
     entries = [k for k, (start, text) in enumerate(timed) if text]
     starts = line_starts([timed[k][1] for k in entries], heard) if heard else []
@@ -206,7 +211,8 @@ def fitted_times(timed, segments, same_recording=False):
         while len(after) > 1 and abs(deltas[after[0]][1] - shifts[b - 1]) < abs(deltas[after[0]][1] - shifts[b]):
             before.append(after.pop(0))
     spread = median([abs(deltas[x][1] - shift) for block, shift in zip(merged, shifts) for x in block])
-    if spread > 1.0:
+    # the same recording fits by itself, however rough Whisper's times are
+    if spread > 1.0 and not same_recording:
         print("[lyrics] the synced times do not fit this recording, using what Whisper hears", flush=True)
         return None
     # each line's shift: the one of its stretch; between two stretches the
@@ -223,9 +229,27 @@ def fitted_times(timed, segments, same_recording=False):
                 cut = max(gaps)[1]
                 for n in range(cut, first):
                     line_shift[n] = shifts[b]
+    result = moved_times(timed, entries, line_shift)
+    if len(merged) > 1:
+        # the shift of the longest stretch: the lines Whisper matched to
+        # another repetition of a chorus would pull a median of all away
+        one = max(zip(merged, shifts), key=lambda b: len(b[0]))[1]
+        whole = moved_times(timed, entries, [one] * len(entries))
+        starts = [start for start, text in result if text]
+        impossible = any(b < a for a, b in zip(starts, starts[1:])) or \
+            bool(audio_seconds and starts[-1] > audio_seconds)
+        if impossible or (levels and onset_score(whole, levels) + ONSET_MARGIN >= onset_score(result, levels)):
+            print("[lyrics] synced times moved to fit this recording: %+.2f s (the stretches Whisper "
+                  "suggests %s)" % (one, "cannot be" if impossible else "do not start the lines on the voice better"),
+                  flush=True)
+            return whole
     print("[lyrics] synced times moved to fit this recording: %s"
           % ", ".join("%+.2f s from line %d" % (shift, deltas[block[0]][0] + 1) if b else "%+.2f s" % shift
                       for b, (block, shift) in enumerate(zip(merged, shifts))), flush=True)
+    return result
+
+
+def moved_times(timed, entries, line_shift):
     result, n = [], 0
     for k, (start, text) in enumerate(timed):
         if text:
@@ -235,6 +259,25 @@ def fitted_times(timed, segments, same_recording=False):
             # the end of a line: moved as the line before it
             result.append((None if start is None else start + line_shift[n], text))
     return result
+
+
+ONSET_SECONDS = 0.4  # voice looked for just before and after a line starts
+ONSET_MARGIN = 0.05
+
+
+def onset_score(timed, levels):
+    """How much more the voice sounds just after the lines start than just
+    before, on average (-1 to 1): the right times start them as it comes in,
+    wrong ones in the middle of singing or of a rest."""
+    width = int(ONSET_SECONDS * 100)
+
+    def sung(first, last):
+        frames = [levels[f] > VOICE_DB for f in range(max(first, 0), min(last, len(levels)))]
+        return sum(frames) / float(width)
+    starts = [int(start * 100) for start, text in timed if text and start is not None]
+    if not starts:
+        return 0.0
+    return sum(sung(f, f + width) - sung(f - width, f) for f in starts) / len(starts)
 
 
 def lyric_segments(lines, segments, audio_seconds=None):
@@ -429,11 +472,12 @@ def install(lyrics_path):
         if lines:
             seconds = len(audio) / 16000.0 if hasattr(audio, "__len__") else None
             same = bool(length and seconds and abs(length - seconds) <= SAME_RECORDING_SECONDS)
-            fitted = fitted_times(timed, segments, same) if timed and all(t is not None for t, _ in timed) else None
+            levels = vocal_levels(audio)
+            fitted = fitted_times(timed, segments, same, levels, seconds) if timed and all(t is not None for t, _ in timed) else None
             placed = fitted and timed_segments(fitted, seconds)
             if placed:
                 result = original_align(placed, model, metadata, audio, *args, **kwargs)
-                trim_line_edges(result.get("segments", []), vocal_levels(audio), audio)
+                trim_line_edges(result.get("segments", []), levels, audio)
                 return result
             segments = lyric_segments(lines, segments, seconds)
         return original_align(segments, model, metadata, audio, *args, **kwargs)
