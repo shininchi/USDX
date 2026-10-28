@@ -92,12 +92,22 @@ def timed_segments(timed, audio_seconds):
 
 
 def heard_words(segments):
-    """(normalized word, start, end) of the transcription, times spread
-    over each segment by character position."""
+    """(normalized word, start, end, has a time of its own) of the
+    transcription: the aligner's time of each word when the segments went
+    through it, else times spread over each segment by character position."""
     result = []
     for seg in segments:
         words = seg.get("text", "").split()
-        if not words:
+        if not words or "start" not in seg or "end" not in seg:
+            continue
+        aligned = seg.get("words") or []
+        if len(aligned) == len(words):
+            spread = heard_words([{k: v for k, v in seg.items() if k != "words"}])
+            for w, a, (_, start, end, first) in zip(words, aligned, spread):
+                if "start" in a and "end" in a:
+                    result.append((normalize(w), a["start"], a["end"], True))
+                else:
+                    result.append((normalize(w), start, end, False))
             continue
         total = sum(len(w) + 1 for w in words)
         duration = seg["end"] - seg["start"]
@@ -470,6 +480,13 @@ def install(lyrics_path):
 
     def aligned(segments, model, metadata, audio, *args, **kwargs):
         if lines:
+            # where each word Whisper heard is sung: the segments only say
+            # where a whole sentence is (Peregrino's lines went 2-5 s off)
+            try:
+                heard = original_align(segments, model, metadata, audio, *args, **kwargs).get("segments")
+                segments = heard or segments
+            except Exception as e:
+                print("[lyrics] Whisper's words not aligned: %s" % e, flush=True)
             seconds = len(audio) / 16000.0 if hasattr(audio, "__len__") else None
             same = bool(length and seconds and abs(length - seconds) <= SAME_RECORDING_SECONDS)
             levels = vocal_levels(audio)
@@ -479,7 +496,12 @@ def install(lyrics_path):
                 result = original_align(placed, model, metadata, audio, *args, **kwargs)
                 trim_line_edges(result.get("segments", []), levels, audio)
                 return result
-            segments = lyric_segments(lines, segments, seconds)
+            # lyrics without times: placed where Whisper heard their words,
+            # their line edges cut to the voice as the synced ones
+            result = original_align(lyric_segments(lines, segments, seconds), model, metadata, audio,
+                                     *args, **kwargs)
+            trim_line_edges(result.get("segments", []), levels, audio)
+            return result
         return original_align(segments, model, metadata, audio, *args, **kwargs)
 
     whisperx.align = align
