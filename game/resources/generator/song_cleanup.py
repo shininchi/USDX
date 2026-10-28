@@ -587,7 +587,7 @@ def starts_with_vowel(text):
 JOIN_GAP_SECONDS = 0.3  # words further apart are not sung as one syllable
 
 
-def join_vowel_syllables(notes, beat_seconds):
+def join_vowel_syllables(notes, beat_seconds, split=None):
     """A word ending in a vowel and the next one starting with one are sung
     as one syllable in Spanish ("que‿en", "mi‿objetivo"), and charts write
     them in one note ("que en"): in the human charts tried, 85% of them.
@@ -595,7 +595,9 @@ def join_vowel_syllables(notes, beat_seconds):
     of the first word; its note stays, held ("~") at its own pitch, or is
     the same note when the pitch is the same: giving the joined note one
     pitch over both lost notes sung at another. Only inside a line, not
-    after a held note. Returns the new list of notes."""
+    after a held note. A note holding more syllables of the word ("ese",
+    too short to split before) gives only its first: "Y e", "se". Returns
+    the new list of notes."""
     max_gap = JOIN_GAP_SECONDS / beat_seconds
     out = []
     for note in notes:
@@ -604,6 +606,13 @@ def join_vowel_syllables(notes, beat_seconds):
                 and not note.is_continuation and ends_in_vowel(last.text)
                 and starts_with_vowel(note.text)
                 and note.start - last.end <= max_gap):
+            parts = split(note.text.strip()) if split else None
+            if parts:
+                last.text = last.text + parts[0]
+                note = Note(note.kind, note.start, note.length, note.pitch,
+                            "".join(parts[1:]) + (" " if note.ends_word else ""))
+                out.append(note)
+                continue
             last.text = last.text + note.text.rstrip(" ")
             held = "~" + (" " if note.ends_word else "")
             if note.pitch == last.pitch:
@@ -973,7 +982,7 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
         lines = break_lines(merged, beat_seconds)
     for i, line in enumerate(lines):
         notes_of_line = [n for word in line for n in word]
-        out.extend(n.line() for n in join_vowel_syllables(notes_of_line, beat_seconds))
+        out.extend(n.line() for n in join_vowel_syllables(notes_of_line, beat_seconds, split))
         if i < len(lines) - 1:
             last = line[-1][-1]
             following = lines[i + 1][0][0]
