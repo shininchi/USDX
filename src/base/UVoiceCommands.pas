@@ -470,14 +470,18 @@ begin
   end;
 
   // through a watcher that stops the server when the game is gone: a crash
-  // or a forced quit left one running (with its memory) at every start
+  // or a forced quit left one running (with its memory) at every start. The
+  // watching runs in a shell of its own: Terminate kills this one at once
+  // (SIGKILL after SIGTERM), before its trap runs, which left the server on
+  // after every quit
   Server := TProcess.Create(nil);
   Server.Executable := '/bin/sh';
   Server.Parameters.Add('-c');
   Server.Parameters.Add('game=$1; shift; "$@" & server=$!; ' +
+    '( while kill -0 "$game" 2>/dev/null && kill -0 "$server" 2>/dev/null; do sleep 2; done; ' +
+    'kill "$server" 2>/dev/null ) & ' +
     'trap ''kill $server 2>/dev/null; exit 0'' TERM INT HUP; ' +
-    'while kill -0 "$game" 2>/dev/null && kill -0 "$server" 2>/dev/null; do sleep 2; done; ' +
-    'kill "$server" 2>/dev/null');
+    'wait "$server"');
   Server.Parameters.Add('whisper-watch');
   Server.Parameters.Add(IntToStr(GetProcessID));
   Server.Parameters.Add(ServerPath);
