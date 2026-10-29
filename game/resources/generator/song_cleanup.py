@@ -178,6 +178,24 @@ def word_text(word):
     return "".join(n.text for n in word).replace("~", "").strip()
 
 
+def join_split_words(notes, known):
+    """UltraSinger sometimes ends a word after its first syllable and a held
+    note, breaking the line there ("Pre~~ / fiero", "Si / go"): pieces that
+    together are a word of the lyrics, and are not both words of their own,
+    are one word again. known: the words of the lyrics, normalized."""
+    if not known:
+        return
+    ws = words(notes)
+    i = 0
+    while i < len(ws) - 1:
+        a, b = Normalize(word_text(ws[i])), Normalize(word_text(ws[i + 1]))
+        if a and b and a + b in known and not (a in known and b in known):
+            ws[i][-1].text = ws[i][-1].text.rstrip(" ")
+            ws[i:i + 2] = [ws[i] + ws[i + 1]]
+            continue
+        i += 1
+
+
 def snap_words(notes, onsets, gap, beat_seconds):
     """Moves the start of each word to the nearest vocal onset (seconds)."""
     if not onsets:
@@ -970,6 +988,11 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
     if not notes:
         return body
 
+    if lyric_lines:
+        known = [w for line in lyric_lines for w in line.split()]
+    else:
+        known = ["".join(c for c, _ in word) for word in letters or []]
+    join_split_words(notes, {Normalize(w) for w in known})
     fold_octaves(notes)
     merged = []
     for group in syllables(notes):
