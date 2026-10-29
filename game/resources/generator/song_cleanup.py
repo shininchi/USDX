@@ -565,6 +565,21 @@ def drop_stray_notes(notes, levels, gap, beat_seconds):
     return out
 
 
+def without_late_holds(word, beat_seconds):
+    """The last word of a line, stretched by the aligner over what follows
+    the voice, keeps notes of reverb or of instruments left in the vocals
+    seconds after it is sung: a held syllable does not stop that long and
+    go on. Those notes are dropped. Returns the word's notes."""
+    for k in range(1, len(word)):
+        if word[k].is_continuation and \
+                (word[k].start - word[k - 1].end) * beat_seconds >= LONG_PAUSE_SECONDS:
+            kept = word[:k]
+            if not kept[-1].ends_word:
+                kept[-1].text += " "
+            return kept
+    return word
+
+
 VOWELS = set("aeiouáéíóúü")
 
 
@@ -989,6 +1004,9 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
         lines = lines_like_lyrics(merged, lyric_lines)
     else:
         lines = break_lines(merged, beat_seconds)
+    for line in lines:
+        if line:
+            line[-1] = without_late_holds(line[-1], beat_seconds)
     for i, line in enumerate(lines):
         notes_of_line = [n for word in line for n in word]
         out.extend(n.line() for n in join_vowel_syllables(notes_of_line, beat_seconds, split))

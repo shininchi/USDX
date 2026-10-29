@@ -414,6 +414,65 @@ def pitch_leap(audio, start, end):
     return start + k / 100.0
 
 
+GLUED_SECONDS = 0.5  # a line's last word this close to the next line is on its first syllable
+PAUSE_SECONDS = 0.15  # a break in the voice this long ends a sung phrase
+
+
+def sung_before_pause(audio, start, end):
+    """The aligner sometimes puts the last word of a line (sung right after
+    the word before it, in a run of notes) on the first syllable of the next
+    line, after a pause, and leaves the voice where it is sung to the word
+    before. Returns (start, end) of the phrase that ends at that pause, from
+    where the voice leaves the held note of the word before; None if the
+    last word does not come right after a pause."""
+    if audio is None or end - start < 1.0:
+        return None
+    try:
+        import librosa
+        import numpy as np
+        y = np.asarray(audio[int(start * 16000):int((end + 0.1) * 16000)], dtype=np.float32)
+        f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=16000, frame_length=1024, hop_length=160)
+    except Exception as e:  # aligning still works without it
+        print("[lyrics] no pitch: %s" % e, flush=True)
+        return None
+    semis = 12 * np.log2(np.where(voiced, f0, np.nan) / 440.0)
+    sung = ~np.isnan(semis)
+    pause = int(PAUSE_SECONDS * 100)
+    # the pause right before the last word
+    k = min(len(sung), int((end - start) * 100) + 5)
+    while k > 0 and sung[k - 1]:
+        k -= 1
+    if (end - start) * 100 - k > GLUED_SECONDS * 100:  # the word does not start after the pause
+        return None
+    stop = k
+    while stop > 0:  # a breath in it is not the voice
+        if not sung[stop - 1]:
+            stop -= 1
+            continue
+        blip = stop
+        while blip > 0 and sung[blip - 1]:
+            blip -= 1
+        if stop - blip >= 12:
+            break
+        stop = blip
+    if k - stop < pause or stop == 0:
+        return None
+    # back to a break in the voice, or to a held note at another pitch
+    begin = stop
+    while begin > 0:
+        if not sung[max(0, begin - 8):begin].any():
+            break
+        tail = semis[begin:stop][~np.isnan(semis[begin:stop])]
+        held = semis[max(0, begin - 10):begin][~np.isnan(semis[max(0, begin - 10):begin])]
+        if len(tail) >= 10 and len(held) >= 8 and np.ptp(held) <= 1.0 and \
+                abs(np.median(held) - np.median(tail)) > 2.5:
+            break
+        begin -= 1
+    if (stop - begin) / 100.0 < 0.25 or begin == 0:
+        return None
+    return round(start + begin / 100.0, 3), round(start + stop / 100.0, 3)
+
+
 def vocal_levels(audio):
     """Level in dB (0 = the loudest) of each 10 ms of the (16 kHz) vocals."""
     try:
@@ -458,6 +517,14 @@ def trim_line_edges(aligned, levels, audio=None):
             if leap is not None:
                 t = leap - 0.01
             last["end"] = round(t + 0.01, 3)
+        if n + 1 < len(lines) and len(words) > 1 and \
+                lines[n + 1][0]["start"] - last["start"] < GLUED_SECONDS:
+            sung = sung_before_pause(audio, words[-2]["start"], last["start"])
+            if sung is not None:
+                last["start"], last["end"] = sung
+                for w in words[:-1]:
+                    w["end"] = min(w["end"], sung[0])
+                    w["start"] = min(w["start"], w["end"] - 0.05)
         if n + 1 < len(lines):
             next_start = lines[n + 1][0]["start"]
             if last["end"] > next_start - 0.02:

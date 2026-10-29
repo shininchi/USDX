@@ -566,6 +566,65 @@ def set_origin_comment(txt, source, lyrics):
         f.write("\n".join(header + body) + "\n")
 
 
+END_QUIET_SECONDS = 4.0  # a silent or noisy ending this long is cut with #END
+END_QUIET_DB = 20       # that far below the song's usual loudness
+END_AFTER_SECONDS = 1.0  # the song ends this long after the quiet starts
+SILENCE_DB = -60        # quieter than this is silence
+
+
+def quiet_ending(audio, ffmpeg_dir):
+    """Where the quiet that lasts to the end of the audio starts (s): silence,
+    or the noise after the music of a recording made live or for a video.
+    None if the audio does not end that way."""
+    ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg") if ffmpeg_dir else "ffmpeg"
+    try:
+        import numpy as np
+        raw = subprocess.run([ffmpeg, "-v", "error", "-i", audio, "-ac", "1", "-ar", "8000",
+                              "-f", "s16le", "-"], capture_output=True, timeout=120).stdout
+        x = np.frombuffer(raw, dtype=np.int16).astype(np.float64) / 32768.0
+        seconds = x[:len(x) // 8000 * 8000].reshape(-1, 8000)
+        db = 10 * np.log10((seconds ** 2).mean(axis=1) + 1e-12)
+    except Exception:
+        return None
+    if len(db) < 30:
+        return None
+    # silence: the last chord rings out into it, as quiet as such noise
+    k = len(db)
+    while k > 0 and db[k - 1] < SILENCE_DB:
+        k -= 1
+    if len(db) - k >= END_QUIET_SECONDS:
+        return float(k)
+    # over 5 s, so a knock or a cough in the noise does not end it
+    smooth = [np.median(db[max(0, i - 2):i + 3]) for i in range(len(db))]
+    quiet = np.median(db) - END_QUIET_DB
+    k = len(db)
+    while k > 0 and smooth[k - 1] < quiet:
+        k -= 1
+    return float(k) if len(db) - k >= END_QUIET_SECONDS else None
+
+
+def set_end_at_silence(txt, ffmpeg_dir):
+    """Ends a song that ends in silence (a hidden track, a long fade into
+    nothing, a video's credits) soon after the sound stops, with #END; an
+    #END already there is kept."""
+    header, body = split_song(read_text(txt))
+    tags = {tag_of(l): l.split(":", 1)[1].strip() for l in header if ":" in l}
+    audio = tags.get("AUDIO") or tags.get("MP3")
+    bpm = tag_value(header, "BPM")
+    if "END" in tags or not audio or bpm <= 0:
+        return
+    silence = quiet_ending(os.path.join(os.path.dirname(txt), audio), ffmpeg_dir)
+    if silence is None:
+        return
+    last = max((int(l.split()[1]) + int(l.split()[2]) for l in body
+                if l[:1] in ":*FRG" and len(l.split()) >= 4), default=0)
+    sung_until = tag_value(header, "GAP") / 1000.0 + last * 60.0 / (bpm * 4)
+    end = max(silence, sung_until) + END_AFTER_SECONDS
+    header.append("#END:%d" % round(end * 1000))
+    with open(txt, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(header + body) + "\n")
+
+
 def artist_title(txt):
     """(artist, title) of a song file, None if it lacks them."""
     tags = {tag_of(l): l.split(":", 1)[1].strip() for l in split_song(read_text(txt))[0] if ":" in l}
@@ -837,6 +896,7 @@ def main():
                       encoding="utf-8", newline="\n") as f:
                 f.write("\n".join(plain_lyrics(lyrics)) + "\n")
         set_origin_comment(result, source, lyrics)
+        set_end_at_silence(result, args.ffmpeg)
         write_heard_lyrics(result, find_file(work, "vocals.wav"))
         say("@@DONE " + result)
     except KeyboardInterrupt:
