@@ -22,6 +22,8 @@ import sys
 import unicodedata
 
 PAD_SECONDS = 0.3  # extra time around each line for the aligner
+SQUEEZED_WORD_SECONDS = 0.12  # a line heard in less than this per word was squeezed by the aligner
+HELD_SECONDS = 2.0  # a word held this long before a squeezed one took the time of the words after it
 
 
 def normalize(word):
@@ -291,9 +293,11 @@ def onset_score(timed, levels):
 
 
 def lyric_segments(lines, segments, audio_seconds=None):
+    """The time window of each line (or run of repeated lines), and which
+    of them Whisper's words were squeezed into (see unsqueezed)."""
     heard = heard_words(segments)
     if not heard:
-        return segments
+        return segments, []
     words, owner = [], []
     for i, line in enumerate(lines):
         for w in line.split():
@@ -356,11 +360,14 @@ def lyric_segments(lines, segments, audio_seconds=None):
         groups.append((i, j))
         i = j
 
-    result, prev_end = [], 0.0
+    result, prev_end, squeezed = [], 0.0, []
     for i, j in groups:
-        start = max(prev_end, min(spans[k][0] for k in range(i, j)) - PAD_SECONDS)
+        first = min(spans[k][0] for k in range(i, j))
+        start = max(prev_end, first - PAD_SECONDS)
         last = max(spans[k][1] for k in range(i, j))
         end = max(start + 0.5 * (j - i), last + PAD_SECONDS)
+        if last - first < SQUEEZED_WORD_SECONDS * sum(len(lines[k].split()) for k in range(i, j)):
+            squeezed.append(len(result))
         result.append({"text": " ".join(lines[i:j]), "start": start, "end": end})
         prev_end = last
     repeated = sum(1 for i, j in groups if j - i > 1)
@@ -369,7 +376,54 @@ def lyric_segments(lines, segments, audio_seconds=None):
     matched = sum(1 for t in times if t is not None)
     print("[lyrics] %d lines, %d of %d words found in the transcription"
           % (len(lines), matched, len(words)), flush=True)
+    return result, squeezed
+
+
+def held_over(windows, aligned):
+    """The windows whose aligned words have one held for seconds and a
+    later one squeezed to an instant: the aligner gave the held word the
+    time of the words after it (Peregrino: "más" 2.9 s, "río" 0.06 s)."""
+    words = [w for seg in aligned for w in seg.get("words", [])]
+    result, n = [], 0
+    for i, window in enumerate(windows):
+        count = len(window["text"].split())
+        lengths = [w["end"] - w["start"] for w in words[n:n + count] if "start" in w and "end" in w]
+        n += count
+        held = [k for k, length in enumerate(lengths) if length >= HELD_SECONDS]
+        if held and any(length < SQUEEZED_WORD_SECONDS for length in lengths[held[0] + 1:]):
+            result.append(i)
     return result
+
+
+def unsqueezed(windows, squeezed, align):
+    """The windows of the lines Whisper's words were squeezed into, placed
+    again. Aligning what it heard, whisperx may hold a word for seconds and
+    give the next line an instant (Peregrino: "conmigo" 6 s, "Allá donde
+    vaya el agua" 0.4 s after it, sung 3.5 s earlier), and the line's own
+    window is then just as wrong. Such a line is aligned in one block with
+    the lines around it, which finds where each of them starts; each one
+    is then aligned in its own window between those starts, as the block
+    alone holds and squeezes other words."""
+    windows = [dict(w) for w in windows]
+    for i in squeezed:
+        a, b = max(0, i - 1), min(len(windows), i + 2)
+        block = {"text": " ".join(w["text"] for w in windows[a:b]),
+                 "start": windows[a]["start"], "end": windows[b - 1]["end"]}
+        try:
+            words = [w for seg in align([block]).get("segments", []) for w in seg.get("words", [])]
+        except Exception as e:
+            print("[lyrics] squeezed line %d not placed again: %s" % (i + 1, e), flush=True)
+            continue
+        n = 0
+        for k in range(a, b):
+            if k > a and n < len(words) and "start" in words[n] and \
+                    windows[k - 1]["start"] < words[n]["start"] < windows[k]["end"]:
+                windows[k - 1]["end"] = words[n]["start"] + PAD_SECONDS
+                windows[k]["start"] = words[n]["start"] - PAD_SECONDS
+            n += len(windows[k]["text"].split())
+    if squeezed:
+        print("[lyrics] %d lines squeezed by the aligner placed again" % len(squeezed), flush=True)
+    return windows
 
 
 VOICE_DB = -40  # below this (against the loudest moment) the voice is silent
@@ -647,8 +701,15 @@ def install(lyrics_path):
                 return result
             # lyrics without times: placed where Whisper heard their words,
             # their line edges cut to the voice as the synced ones
-            result = original_align(lyric_segments(lines, segments, seconds), model, metadata, audio,
-                                     *args, **kwargs)
+            def align_lines(windows):
+                return original_align(windows, model, metadata, audio, *args, **kwargs)
+            windows, squeezed = lyric_segments(lines, segments, seconds)
+            windows = unsqueezed(windows, squeezed, align_lines)
+            result = align_lines(windows)
+            squeezed = held_over(windows, result.get("segments", []))
+            if squeezed:
+                windows = unsqueezed(windows, squeezed, align_lines)
+                result = align_lines(windows)
             trim_line_edges(result.get("segments", []), levels, audio)
             return result
         return original_align(segments, model, metadata, audio, *args, **kwargs)
