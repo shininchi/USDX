@@ -113,11 +113,14 @@ type
 
   {* Adds a video to a song with resources/generator/add_video.py: found on
    * YouTube by the song's name, from a link or from a file, with the
-   * #VIDEOGAP that puts its music where the song's is. *}
+   * #VIDEOGAP that puts its music where the song's is. A video that is
+   * only a picture with the lyrics on it becomes the song's background
+   * picture instead, as Source 'still' does with the song's own video. *}
   TVideoAdder = class(TSongGenerator)
     private
-      fTxt:   UTF8String;
-      fWrite: boolean;
+      fTxt:    UTF8String;
+      fSource: UTF8String;
+      fWrite:  boolean;
       function ResultPart(Index: integer): UTF8String;
     protected
       function ScriptName: UTF8String; override;
@@ -125,13 +128,15 @@ type
       procedure ApplyResult; override;
     public
       constructor Create;
-      // Source: 'search', a link or a video file; WriteTags: set #VIDEO and
-      // #VIDEOGAP in the txt (else the caller sets them, as the editor does)
+      // Source: 'search', 'still', a link or a video file; WriteTags: set
+      // #VIDEO and #VIDEOGAP (or #BACKGROUND) in the txt (else the caller
+      // sets them, as the editor does)
       function Add(const Txt, Source: UTF8String; WriteTags: boolean): boolean;
       // of the finished run
       function VideoName: UTF8String;
       function VideoGap: real;
       function GapSure: boolean;  // false: the gap is a guess, to be checked
+      function IsStill: boolean;  // VideoName is a background picture
       property Txt: UTF8String read fTxt;
   end;
 
@@ -656,6 +661,7 @@ begin
   if State = gsRunning then
     Exit;
   fTxt := Txt;
+  fSource := Trim(Source);
   fWrite := WriteTags;
   Args := TStringList.Create;
   Args.Add('--txt');
@@ -667,7 +673,7 @@ begin
   Result := Launch(Source, Txt, Args);
 end;
 
-// "<file>\t<gap>\t<sure|unsure>" from add_video.py
+// "<file>\t<gap>\t<sure|unsure>\t<video|still>" from add_video.py
 function TVideoAdder.ResultPart(Index: integer): UTF8String;
 var
   Parts: TStringList;
@@ -704,6 +710,11 @@ begin
   Result := ResultPart(2) = 'sure';
 end;
 
+function TVideoAdder.IsStill: boolean;
+begin
+  Result := ResultPart(3) = 'still';
+end;
+
 // the song menu's runs wrote the txt: its header is read again so the
 // song list shows the video
 procedure TVideoAdder.ApplyResult;
@@ -729,7 +740,11 @@ begin
       Break;
     end;
   end;
-  if GapSure then
+  if fSource = 'still' then
+    SongRequestsShowNotice(Language.Translate('VIDEO_STILL_DONE'))
+  else if IsStill then
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_STILL'))
+  else if GapSure then
     SongRequestsShowNotice(Language.Translate('VIDEO_ADD_DONE') + ': ' + VideoName)
   else
     SongRequestsShowNotice(Language.Translate('VIDEO_ADD_UNSURE'));

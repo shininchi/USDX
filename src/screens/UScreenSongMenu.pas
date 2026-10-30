@@ -336,7 +336,15 @@ begin
     SDL_EventState(SDL_DROPFILE, SDL_DISABLE);
 end;
 
-// Source: 'search' (YouTube, by the song's name), a link or a video file
+// the song's video replaced by its picture, once the user said yes
+procedure OnStillConfirmed(Value: boolean; Data: Pointer);
+begin
+  if Value then
+    ScreenSongMenu.AddVideo('still');
+end;
+
+// Source: 'search' (YouTube, by the song's name), 'still' (the song's video
+// as its background picture), a link or a video file
 procedure TScreenSongMenu.AddVideo(const Source: UTF8String);
 var
   Song: TSong;
@@ -430,9 +438,8 @@ begin
         Button[1].Visible := true;
         Button[2].Visible := ((Length(PlaylistMedley.Song) > 0) or (CatSongs.Song[ScreenSong.Interaction].Medley.Source > msNone));
         Button[3].Visible := true;
-        // add a video to a song without one
-        Button[4].Visible := not CatSongs.Song[ScreenSong.Interaction].Main and
-          not CatSongs.Song[ScreenSong.Interaction].Video.IsSet;
+        // add a video to a song without one, or make a song's video a picture
+        Button[4].Visible := not CatSongs.Song[ScreenSong.Interaction].Main;
         if not Button[0].Visible then
           Interaction := 1;
 
@@ -449,7 +456,10 @@ begin
         Button[1].Text[0].Text := Language.Translate('SONG_MENU_SONG');
         Button[2].Text[0].Text := Language.Translate('SONG_MENU_MEDLEY');
         Button[3].Text[0].Text := Language.Translate('SONG_MENU_REFRESH_SCORES');
-        Button[4].Text[0].Text := Language.Translate('SONG_MENU_VIDEO');
+        if CatSongs.Song[ScreenSong.Interaction].Video.IsSet then
+          Button[4].Text[0].Text := Language.Translate('SONG_MENU_STILL')
+        else
+          Button[4].Text[0].Text := Language.Translate('SONG_MENU_VIDEO');
       end;
     SM_Video:
       begin
@@ -917,8 +927,14 @@ begin
               ScreenSong.StopVideoPreview();
             end;
 
-          7: // button 5: add a video
-            MenuShow(SM_Video);
+          7: // button 5: add a video, or make the song's video a picture
+            if CatSongs.Song[ScreenSong.Interaction].Video.IsSet then
+            begin
+              Visible := false;
+              ScreenPopupCheck.ShowPopup('SONG_MENU_STILL_CONFIRM', OnStillConfirmed, nil, false);
+            end
+            else
+              MenuShow(SM_Video);
           end;
       end;
 

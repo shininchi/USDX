@@ -360,6 +360,7 @@ type
       procedure HandleMultiplyBPM(SDL_ModState: word);
       procedure HandleVideo(SDL_ModState: word);
       procedure UpdateVideoSlide;
+      procedure UpdateBackgroundSlide;
       procedure AddVideo(const Source: UTF8String);
       procedure AddCopiedVideoLink;
       procedure TakeAddedVideo;
@@ -5711,6 +5712,39 @@ begin
   UpdateSelectSlideOptions(VideoSlideId,VideoVal,SlideVideoIndex);
 end;
 
+// the pictures in the song's folder as options of the Background header
+procedure TScreenEditSub.UpdateBackgroundSlide;
+const
+  SUPPORTED_EXTS_IMAGE: array[0..1] of string = ('.jpg', '.png');
+var
+  Files:     TPathDynArray;
+  FileIndex: Integer;
+  Ext:       string;
+begin
+  SetLength(Files, 0);
+  SetLength(BackgroundVal, 0);
+  SlideBackgroundIndex := -1;
+
+  for Ext in SUPPORTED_EXTS_IMAGE do
+    Songs.FindFilesByExtension(Path(includeTrailingPathDelimiter(CurrentSong.Path.ToNative)), Path(Ext), true, Files);
+
+  for FileIndex := 0 to High(Files) do
+  begin
+    SetLength(BackgroundVal, High(BackgroundVal) + 2);
+    BackgroundVal[FileIndex] := ExtractFileName(Files[FileIndex].ToUTF8());
+    if UTF8CompareText(BackgroundVal[FileIndex], CurrentSong.Background.ToUTF8) = 0 then
+          SlideBackgroundIndex := FileIndex;
+  end;
+
+  if High(Files) < 0 then
+  begin
+    SetLength(BackgroundVal, 1);
+    BackgroundVal[0] := CurrentSong.Background.ToUTF8;
+    SlideBackgroundIndex := 0;
+  end;
+  UpdateSelectSlideOptions(BackgroundSlideId,BackgroundVal,SlideBackgroundIndex);
+end;
+
 // Source: 'search' (YouTube, by the song's name), a link or a video file;
 // the editor sets #VIDEO and #VIDEOGAP when it is done (see Draw), saved
 // with the song
@@ -5761,6 +5795,22 @@ begin
   end;
   CopyToUndo;
   StopVideoPreview;
+  if VideoAdder.IsStill then
+  begin
+    // a picture with the lyrics on it: the song's background picture
+    CurrentSong.Background := Path(VideoAdder.VideoName);
+    UpdateBackgroundSlide;
+    Tex_PrevBackground.Free;
+    Tex_PrevBackground := Renderer.LoadTexture(CurrentSong.Path.Append(CurrentSong.Background));
+    Statics[BackgroundImageId].Texture.Free;
+    Statics[BackgroundImageId].Texture   := Tex_PrevBackground.Clone;
+    Statics[BackgroundImageId].Texture.X := Theme.EditSub.BackgroundImage.X;
+    Statics[BackgroundImageId].Texture.Y := Theme.EditSub.BackgroundImage.Y;
+    Statics[BackgroundImageId].Texture.W := Theme.EditSub.BackgroundImage.W;
+    Statics[BackgroundImageId].Texture.H := Theme.EditSub.BackgroundImage.H;
+    Text[TextInfo].Text := Language.Translate('VIDEO_ADD_EDITOR_STILL');
+    Exit;
+  end;
   CurrentSong.Video := Path(VideoAdder.VideoName);
   CurrentSong.VideoGAP := VideoAdder.VideoGap;
   UpdateVideoSlide;
@@ -5957,28 +6007,7 @@ begin
     UpdateSelectSlideOptions(CoverSlideId,CoverVal,SlideCoverIndex);
 
     // Header Background
-    SetLength(Files, 0);
-    SetLength(BackgroundVal, 0);
-    SlideBackgroundIndex := -1;
-
-    for Ext in SUPPORTED_EXTS_IMAGE do
-      Songs.FindFilesByExtension(Path(includeTrailingPathDelimiter(CurrentSong.Path.ToNative)), Path(Ext), true, Files);
-
-    for FileIndex := 0 to High(Files) do
-    begin
-      SetLength(BackgroundVal, High(BackgroundVal) + 2);
-      BackgroundVal[FileIndex] := ExtractFileName(Files[FileIndex].ToUTF8());
-      if UTF8CompareText(BackgroundVal[FileIndex], CurrentSong.Background.ToUTF8) = 0 then
-            SlideBackgroundIndex := FileIndex;
-    end;
-
-    if High(Files) < 0 then
-    begin
-      SetLength(BackgroundVal, 1);
-      BackgroundVal[0] := CurrentSong.Background.ToUTF8;
-      SlideBackgroundIndex := 0;
-    end;
-    UpdateSelectSlideOptions(BackgroundSlideId,BackgroundVal,SlideBackgroundIndex);
+    UpdateBackgroundSlide;
 
     // Header Video
     UpdateVideoSlide;

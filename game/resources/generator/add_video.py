@@ -1,15 +1,19 @@
 """Adds a video to a song: found on YouTube by the song's name, from a
 link, or from a file, made into one the game plays smoothly and put in the
 song's folder, with the #VIDEOGAP that puts its music where the song's is.
+A video that is only a picture with the lyrics on it becomes the song's
+background picture instead, without the lyrics; --source still does that
+with the video the song has.
 
-Usage: python add_video.py --txt SONG.txt [--source search|LINK|FILE]
+Usage: python add_video.py --txt SONG.txt [--source search|still|LINK|FILE]
                            [--ffmpeg DIR] [--write]
 
 Prints progress lines for the game ("@@STAGE search|download|convert|sync")
-and at the end "@@DONE <video file name>\t<videogap>\t<sure|unsure>" or
-"@@ERROR <reason>". With --write the song's #VIDEO and #VIDEOGAP are set in
-its txt; without it (the editor, which saves the song itself) nothing but
-the video is written.
+and at the end "@@DONE <file name>\t<videogap>\t<sure|unsure>\t<video|still>"
+or "@@ERROR <reason>". With --write the song's #VIDEO and #VIDEOGAP (or
+#BACKGROUND) are set in its txt, and a video replaced by its picture is
+deleted; without it (the editor, which saves the song itself) nothing but
+the new file is written.
 """
 
 import argparse
@@ -31,6 +35,8 @@ MAX_GAP_SECONDS = 120   # the music of a video starts at most this far from the 
 SURE_MATCH = 0.3        # the same recording matches about 1, another song about 0.05
 SURE_MARGIN = 1.15      # ...and this much better than at any other moment
 SMOOTH_CODECS = ("vp9", "vp8")  # played without stutter; others are converted
+STILL_SAMPLES = 15      # frames compared to tell a picture from a filmed video
+STILL_CHANGE = 0.05     # a picture with lyrics changes ~0.3% of its pixels, a filmed video over 50%
 
 
 def tool(ffmpeg_dir, name):
@@ -59,6 +65,63 @@ def video_codec(path, ffmpeg_dir):
                               capture_output=True, text=True, timeout=30).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def frames(video, ffmpeg_dir, size=None):
+    """STILL_SAMPLES frames spread over the video (leaving out its fades in
+    and out) as RGB arrays, at their own size or (width, height)."""
+    import numpy as np
+    seconds = media_seconds(video, ffmpeg_dir) or 0
+    if size is None:
+        try:
+            out = subprocess.run([tool(ffmpeg_dir, "ffprobe"), "-v", "error", "-select_streams", "v:0",
+                                  "-show_entries", "stream=width,height", "-of", "csv=p=0", video],
+                                 capture_output=True, text=True, timeout=30).stdout
+            size = tuple(int(v) for v in out.strip().split(",")[:2])
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return []
+    w, h = size
+    result = []
+    for i in range(STILL_SAMPLES):
+        at = seconds * (0.1 + 0.8 * i / (STILL_SAMPLES - 1))
+        try:
+            raw = subprocess.run([tool(ffmpeg_dir, "ffmpeg"), "-v", "error", "-ss", "%.2f" % at, "-i", video,
+                                  "-frames:v", "1", "-vf", "scale=%d:%d" % (w, h), "-pix_fmt", "rgb24",
+                                  "-f", "rawvideo", "-"], capture_output=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if len(raw) == w * h * 3:
+            result.append(np.frombuffer(raw, np.uint8).reshape(h, w, 3))
+    return result
+
+
+def is_still(video, ffmpeg_dir):
+    """Whether the video is a picture that only the lyrics change on."""
+    import numpy as np
+    small = frames(video, ffmpeg_dir, (160, 90))
+    if len(small) < STILL_SAMPLES // 2:
+        return False
+    grey = np.stack(small).astype(np.int16).mean(axis=3)
+    usual = np.median(grey, axis=0)
+    return float(np.median([(np.abs(g - usual) > 30).mean() for g in grey])) < STILL_CHANGE
+
+
+def save_picture(video, target, ffmpeg_dir):
+    """The video's picture as a jpg: the frame nearest to the usual colour
+    of each pixel, which leaves out the lyrics, as they are there only a
+    while (the usual colours themselves lose twinkling stars and such)."""
+    import numpy as np
+    full = frames(video, ffmpeg_dir)
+    if not full:
+        raise RuntimeError("the video could not be read")
+    stack = np.stack(full)
+    usual = np.median(stack, axis=0)
+    picture = stack[int(np.argmin([np.abs(f - usual).mean() for f in stack]))]
+    h, w = picture.shape[:2]
+    subprocess.run([tool(ffmpeg_dir, "ffmpeg"), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                    "-s", "%dx%d" % (w, h), "-i", "-", "-q:v", "2", target],
+                   input=picture.tobytes(), check=True, capture_output=True, timeout=60)
+    return target
 
 
 def search(artist, title, seconds):
@@ -163,14 +226,19 @@ def make_playable(video, target_base, ffmpeg_dir):
     return copy
 
 
-def set_video_tags(txt, video_name, gap):
+def set_video_tags(txt, video_name, gap, still=False):
+    """#VIDEO and #VIDEOGAP, or for a picture #BACKGROUND and no video."""
     text = read_text(txt)
     header, body = split_song(text)
-    header = [l for l in header if tag_of(l) not in ("VIDEO", "VIDEOGAP")]
+    gone = ("VIDEO", "VIDEOGAP", "BACKGROUND") if still else ("VIDEO", "VIDEOGAP")
+    header = [l for l in header if tag_of(l) not in gone]
     # after the other files, as the game writes it
     at = max([i + 1 for i, l in enumerate(header) if tag_of(l) in ("MP3", "AUDIO", "COVER", "BACKGROUND")]
              or [len(header)])
-    header[at:at] = ["#VIDEO:" + video_name, "#VIDEOGAP:%s" % ("%.2f" % gap).rstrip("0").rstrip(".")]
+    if still:
+        header[at:at] = ["#BACKGROUND:" + video_name]
+    else:
+        header[at:at] = ["#VIDEO:" + video_name, "#VIDEOGAP:%s" % ("%.2f" % gap).rstrip("0").rstrip(".")]
     tmp = txt + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(header + body) + "\n")
@@ -193,8 +261,21 @@ def main():
         return 1
     audio = os.path.join(folder, audio)
     work = tempfile.mkdtemp(prefix=".usdx-video-", dir=folder)
+    stem = os.path.join(folder, os.path.splitext(os.path.basename(args.txt))[0])
     try:
         source = args.source.strip()
+        if source == "still":
+            # the video the song has, as its background picture
+            old = tags.get("VIDEO") and os.path.join(folder, tags["VIDEO"])
+            if not old or not os.path.isfile(old):
+                say("@@ERROR the song has no video")
+                return 1
+            name = os.path.basename(save_picture(old, stem + " [BG].jpg", args.ffmpeg))
+            if args.write:
+                set_video_tags(args.txt, name, 0, still=True)
+                os.remove(old)
+            say("@@DONE %s\t0.00\tsure\tstill" % name)
+            return 0
         if source == "search":
             say("@@STAGE search")
             source = search(tags.get("ARTIST", ""), tags.get("TITLE", ""), media_seconds(audio, args.ffmpeg))
@@ -211,9 +292,16 @@ def main():
             say("@@ERROR not a link or a file: " + source)
             return 1
 
+        if is_still(video, args.ffmpeg):
+            name = os.path.basename(save_picture(video, stem + " [BG].jpg", args.ffmpeg))
+            if args.write:
+                set_video_tags(args.txt, name, 0, still=True)
+            say("@@DONE %s\t0.00\tsure\tstill" % name)
+            return 0
+
         say("@@STAGE sync")
         gap, sure = video_gap(audio, video, args.ffmpeg)
-        base = os.path.join(folder, os.path.splitext(os.path.basename(args.txt))[0] + " [VD]")
+        base = stem + " [VD]"
         for ext in (".webm", ".mkv", ".mp4", ".mov", ".avi"):  # an earlier video of this song
             if os.path.exists(base + ext) and os.path.abspath(base + ext) != os.path.abspath(video):
                 os.remove(base + ext)
@@ -221,7 +309,7 @@ def main():
         name = os.path.basename(result)
         if args.write:
             set_video_tags(args.txt, name, gap)
-        say("@@DONE %s\t%.2f\t%s" % (name, gap, "sure" if sure else "unsure"))
+        say("@@DONE %s\t%.2f\t%s\tvideo" % (name, gap, "sure" if sure else "unsure"))
         return 0
     except Exception as e:
         say("@@ERROR %s" % e)
