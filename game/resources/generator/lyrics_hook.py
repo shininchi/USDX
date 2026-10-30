@@ -473,6 +473,78 @@ def sung_before_pause(audio, start, end):
     return round(start + begin / 100.0, 3), round(start + stop / 100.0, 3)
 
 
+SQUEEZED_SECONDS = 0.1  # a line's last word given less than this was not found by the aligner
+SQUEEZE_LEAP = 5        # semitones: the voice jumping this far starts the next word...
+SQUEEZE_HELD = 1.0      # ...when it holds on this long without a break
+SYLLABLE_SECONDS = 0.18  # each syllable of the word before is sung this long before the leap
+
+
+def vowel_groups(word):
+    """About how many syllables a word has: its groups of vowels."""
+    return max(1, len(re.findall(r"[aeiouáéíóúü]+", word.lower())))
+
+
+def squeezed_word(audio, start, end, before=""):
+    """The aligner sometimes leaves a line's last word an instant at the
+    line's end, the long note it is sung on ("haciendo tú~~~") given to the
+    word before or to nobody. Between start (of the word before) and end
+    (of the last word), the last word is sung from where the voice leaps
+    away from the word before and holds on to the end of the line, once
+    the word before (its text: before) had time for its syllables: a leap
+    after its first one is the word's own ("e~sa~ luz"). A held note
+    followed by more singing, other than a lead-in to the next line, is not
+    the last word. Returns (start, end), or None if there is no such leap."""
+    if audio is None or end - start < 0.5 + SQUEEZE_HELD:
+        return None
+    try:
+        import librosa
+        import numpy as np
+        y = np.asarray(audio[int(start * 16000):int(end * 16000)], dtype=np.float32)
+        f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=16000, frame_length=1024, hop_length=160)
+    except Exception as e:  # aligning still works without it
+        print("[lyrics] no pitch: %s" % e, flush=True)
+        return None
+    semis = 12 * np.log2(np.where(voiced, f0, np.nan) / 440.0)
+    sung = ~np.isnan(semis)
+    held = int(SQUEEZE_HELD * 100)
+    first = int(vowel_groups(before) * SYLLABLE_SECONDS * 100)
+
+    def leap(k):  # semitones between the voice in the 0.15 s before k and after it, over a breath
+        a = semis[max(0, k - 45):k]
+        b = semis[k:k + 45]
+        a, b = a[~np.isnan(a)][-15:], b[~np.isnan(b)][:15]
+        if len(a) < 8 or len(b) < 8:
+            return 0
+        return abs(np.median(b) - np.median(a))
+    k = 15
+    while k < len(semis) - held:
+        if leap(k) < SQUEEZE_LEAP:
+            k += 1
+            continue
+        # the leap is where the change is largest
+        end_of_leap = k
+        while end_of_leap < len(semis) and leap(end_of_leap) >= SQUEEZE_LEAP:
+            end_of_leap += 1
+        at = max(range(k, end_of_leap), key=leap)
+        k = end_of_leap
+        if at < first:  # still the word before: a leap between its syllables
+            continue
+        # held on: no break in the voice of 0.1 s
+        stop = at
+        while stop < len(sung) and sung[stop:stop + 10].any():
+            stop += 1
+        if stop - at < held:
+            continue
+        # more singing after it, other than a lead-in to the next line
+        lead_in = len(sung)
+        while lead_in > stop and sung[max(stop, lead_in - 15):lead_in].any():
+            lead_in -= 1
+        if np.count_nonzero(sung[stop:lead_in]) >= 25:
+            return None
+        return round(start + at / 100.0, 3), round(start + stop / 100.0, 3)
+    return None
+
+
 def vocal_levels(audio):
     """Level in dB (0 = the loudest) of each 10 ms of the (16 kHz) vocals."""
     try:
@@ -502,6 +574,11 @@ def trim_line_edges(aligned, levels, audio=None):
     lines = [words for words in lines if words]
     for n, words in enumerate(lines):
         first, last = words[0], words[-1]
+        if len(words) > 1 and last["end"] - last["start"] < SQUEEZED_SECONDS:
+            sung = squeezed_word(audio, words[-2]["start"], last["end"], words[-2].get("word", ""))
+            if sung is not None:
+                words[-2]["end"] = sung[0]
+                last["start"], last["end"] = sung
         if levels:
             t = first["start"]
             while t < first["end"] - 0.1 and not (sounds(t) and sounds(t + 0.01) and sounds(t + 0.02)):
