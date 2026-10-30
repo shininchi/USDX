@@ -476,7 +476,7 @@ def sung_before_pause(audio, start, end):
 SQUEEZED_SECONDS = 0.1  # a line's last word given less than this was not found by the aligner
 SQUEEZE_LEAP = 5        # semitones: the voice jumping this far starts the next word...
 SQUEEZE_HELD = 1.0      # ...when it holds on this long without a break
-SYLLABLE_SECONDS = 0.18  # each syllable of the word before is sung this long before the leap
+SYLLABLE_SECONDS = 0.1  # each syllable of the word before is sung at least this long before the leap
 
 
 def vowel_groups(word):
@@ -489,11 +489,10 @@ def squeezed_word(audio, start, end, before=""):
     line's end, the long note it is sung on ("haciendo tú~~~") given to the
     word before or to nobody. Between start (of the word before) and end
     (of the last word), the last word is sung from where the voice leaps
-    away from the word before and holds on to the end of the line, once
-    the word before (its text: before) had time for its syllables: a leap
-    after its first one is the word's own ("e~sa~ luz"). A held note
-    followed by more singing, other than a lead-in to the next line, is not
-    the last word. Returns (start, end), or None if there is no such leap."""
+    away from the word before and holds on, to the next break in the voice,
+    once the word before (its text: before) had some time for its
+    syllables. What is sung after that break are sounds ("tú~~ ah~ oh~"),
+    not the word. Returns (start, end), or None if there is no such leap."""
     if audio is None or end - start < 0.5 + SQUEEZE_HELD:
         return None
     try:
@@ -507,12 +506,15 @@ def squeezed_word(audio, start, end, before=""):
     semis = 12 * np.log2(np.where(voiced, f0, np.nan) / 440.0)
     sung = ~np.isnan(semis)
     held = int(SQUEEZE_HELD * 100)
-    first = int(vowel_groups(before) * SYLLABLE_SECONDS * 100)
+    first = max(20, int(vowel_groups(before) * SYLLABLE_SECONDS * 100))
 
-    def leap(k):  # semitones between the voice in the 0.15 s before k and after it, over a breath
-        a = semis[max(0, k - 45):k]
+    def voice_after(k):  # the first 0.15 s of voice from k on, over a breath
         b = semis[k:k + 45]
-        a, b = a[~np.isnan(a)][-15:], b[~np.isnan(b)][:15]
+        return b[~np.isnan(b)][:15]
+
+    def leap(k):  # semitones between the voice in the 0.15 s before k and after it
+        a = semis[max(0, k - 45):k]
+        a, b = a[~np.isnan(a)][-15:], voice_after(k)
         if len(a) < 8 or len(b) < 8:
             return 0
         return abs(np.median(b) - np.median(a))
@@ -527,20 +529,20 @@ def squeezed_word(audio, start, end, before=""):
             end_of_leap += 1
         at = max(range(k, end_of_leap), key=leap)
         k = end_of_leap
-        if at < first:  # still the word before: a leap between its syllables
+        # the word before is sung before the leap: a leap at its start, or
+        # between its syllables, is its own
+        if np.count_nonzero(sung[:at]) < first:
             continue
+        # from where the new note sounds, past a breath before it
+        note = np.median(voice_after(at))
+        while at < len(sung) and not (sung[at] and abs(semis[at] - note) <= 2):
+            at += 1
         # held on: no break in the voice of 0.1 s
         stop = at
         while stop < len(sung) and sung[stop:stop + 10].any():
             stop += 1
         if stop - at < held:
             continue
-        # more singing after it, other than a lead-in to the next line
-        lead_in = len(sung)
-        while lead_in > stop and sung[max(stop, lead_in - 15):lead_in].any():
-            lead_in -= 1
-        if np.count_nonzero(sung[stop:lead_in]) >= 25:
-            return None
         return round(start + at / 100.0, 3), round(start + stop / 100.0, 3)
     return None
 
@@ -596,7 +598,10 @@ def trim_line_edges(aligned, levels, audio=None):
             last["end"] = round(t + 0.01, 3)
         if n + 1 < len(lines) and len(words) > 1 and \
                 lines[n + 1][0]["start"] - last["start"] < GLUED_SECONDS:
-            sung = sung_before_pause(audio, words[-2]["start"], last["start"])
+            # sung on a held note right after the word before, or else in
+            # the phrase before the pause
+            sung = squeezed_word(audio, words[-2]["start"], last["start"], words[-2].get("word", "")) or \
+                sung_before_pause(audio, words[-2]["start"], last["start"])
             if sung is not None:
                 last["start"], last["end"] = sung
                 for w in words[:-1]:
