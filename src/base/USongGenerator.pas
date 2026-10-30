@@ -77,13 +77,20 @@ type
       procedure SetLyricsSource(const Source: UTF8String);
       function GetLyricsSource: UTF8String;
       procedure Finish(Success: boolean; const Text: UTF8String);
-      procedure ApplyResult;
+    protected
+      fName: UTF8String;  // for the log
+      // runs the script with Args (freed by the run) on Input
+      function Launch(const Input, ReplaceTxt: UTF8String; Args: TStringList): boolean;
+      function ScriptName: UTF8String; virtual;
+      function LogFileName: UTF8String; virtual;
+      procedure ApplyResult; virtual;
     public
       constructor Create;
       destructor Destroy; override;
 
       function PythonPath: UTF8String;
       function ScriptPath: UTF8String;
+      function LogPath: UTF8String;
       function Available: boolean;
       // Input: audio/video file or URL; ReplaceTxt: song to fill in, or ''
       // Language: code of the lyrics ('es', 'en'), '' = the config default
@@ -104,9 +111,34 @@ type
       property OutputDir: UTF8String read fOutputDir;
   end;
 
+  {* Adds a video to a song with resources/generator/add_video.py: found on
+   * YouTube by the song's name, from a link or from a file, with the
+   * #VIDEOGAP that puts its music where the song's is. *}
+  TVideoAdder = class(TSongGenerator)
+    private
+      fTxt:   UTF8String;
+      fWrite: boolean;
+      function ResultPart(Index: integer): UTF8String;
+    protected
+      function ScriptName: UTF8String; override;
+      function LogFileName: UTF8String; override;
+      procedure ApplyResult; override;
+    public
+      constructor Create;
+      // Source: 'search', a link or a video file; WriteTags: set #VIDEO and
+      // #VIDEOGAP in the txt (else the caller sets them, as the editor does)
+      function Add(const Txt, Source: UTF8String; WriteTags: boolean): boolean;
+      // of the finished run
+      function VideoName: UTF8String;
+      function VideoGap: real;
+      function GapSure: boolean;  // false: the gap is a guess, to be checked
+      property Txt: UTF8String read fTxt;
+  end;
+
 var
   SongGenerator: TSongGenerator;
-  // file dropped onto the window, picked up by the generator screen
+  VideoAdder: TVideoAdder;
+  // file dropped onto the window, picked up by the screen that enabled drops
   SongGeneratorDroppedFile: UTF8String;
 
 procedure StopSongGenerator;
@@ -126,11 +158,13 @@ uses
   Process,
   UGraphic,
   UIni,
+  ULanguage,
   ULog,
   UPath,
   UPathUtils,
   USong,
   USongRequests,
+  USongRequestsOverlay,
   USongs;
 
 type
@@ -217,7 +251,7 @@ begin
   Pending := '';
   StopAt := 0;
 
-  AssignFile(LogFile, ExtractFilePath(Ini.Filename.ToNative) + 'generator.log');
+  AssignFile(LogFile, fOwner.LogPath);
   try
     Rewrite(LogFile);
     HasLog := true;
@@ -296,6 +330,7 @@ begin
   inherited;
   fLock := TCriticalSection.Create;
   fState := gsIdle;
+  fName := 'SongGenerator';
   LoadConfig;
 end;
 
@@ -346,9 +381,24 @@ begin
   {$ENDIF}
 end;
 
+function TSongGenerator.ScriptName: UTF8String;
+begin
+  Result := 'usdx_generate.py';
+end;
+
 function TSongGenerator.ScriptPath: UTF8String;
 begin
-  Result := ResourcesPath.Append('generator').Append('usdx_generate.py').ToNative;
+  Result := ResourcesPath.Append('generator').Append(ScriptName).ToNative;
+end;
+
+function TSongGenerator.LogFileName: UTF8String;
+begin
+  Result := 'generator.log';
+end;
+
+function TSongGenerator.LogPath: UTF8String;
+begin
+  Result := ExtractFilePath(Ini.Filename.ToNative) + LogFileName;
 end;
 
 function TSongGenerator.Available: boolean;
@@ -420,24 +470,27 @@ begin
     begin
       fState := gsFailed;
       fMessage := Text;
+      fPending := true;  // ApplyResult tells of it where it has to
     end;
   finally
     fLock.Leave;
   end;
   if Success then
-    Log.LogStatus('Generated ' + Text, 'SongGenerator')
+    Log.LogStatus('Done: ' + Text, fName)
   else
-    Log.LogWarn('Generation failed: ' + Text, 'SongGenerator');
+    Log.LogWarn('Failed: ' + Text, fName);
 end;
 
-function TSongGenerator.Start(const Input, ReplaceTxt: UTF8String; const Language: UTF8String): boolean;
+function TSongGenerator.Launch(const Input, ReplaceTxt: UTF8String; Args: TStringList): boolean;
 var
-  Args:   TStringList;
   FFmpeg: UTF8String;
 begin
   Result := false;
   if (State = gsRunning) or (Trim(Input) = '') or not Available then
+  begin
+    Args.Free;
     Exit;
+  end;
 
   // the previous run is over, its thread only needs to be collected
   FreeAndNil(fThread);
@@ -457,11 +510,27 @@ begin
     fLock.Leave;
   end;
 
+  FFmpeg := FindFFmpeg('');
+  if FFmpeg <> '' then
+  begin
+    Args.Add('--ffmpeg');
+    Args.Add(ExtractFileDir(FFmpeg));
+  end;
+
+  Log.LogStatus('Starting on ' + fInput, fName);
+  fThread := TGeneratorThread.Create(Self, Args);
+  Result := true;
+end;
+
+function TSongGenerator.Start(const Input, ReplaceTxt: UTF8String; const Language: UTF8String): boolean;
+var
+  Args: TStringList;
+begin
   Args := TStringList.Create;
   Args.Add('--ultrasinger');
   Args.Add(fUltraSinger);
   Args.Add('--input');
-  Args.Add(fInput);
+  Args.Add(Trim(Input));
   if ReplaceTxt <> '' then
   begin
     Args.Add('--replace');
@@ -484,16 +553,7 @@ begin
     Args.Add('--language');
     Args.Add(fLanguage);
   end;
-  FFmpeg := FindFFmpeg('');
-  if FFmpeg <> '' then
-  begin
-    Args.Add('--ffmpeg');
-    Args.Add(ExtractFileDir(FFmpeg));
-  end;
-
-  Log.LogStatus('Generating from ' + fInput, 'SongGenerator');
-  fThread := TGeneratorThread.Create(Self, Args);
-  Result := true;
+  Result := Launch(Input, ReplaceTxt, Args);
 end;
 
 procedure TSongGenerator.Cancel;
@@ -517,6 +577,8 @@ var
   I:        integer;
   Found:    boolean;
 begin
+  if State <> gsDone then
+    Exit;
   FileName := Path(ResultFile);
   Found := false;
 
@@ -568,9 +630,116 @@ begin
   end;
 end;
 
+{ TVideoAdder }
+
+constructor TVideoAdder.Create;
+begin
+  inherited Create;
+  fName := 'VideoAdder';
+end;
+
+function TVideoAdder.ScriptName: UTF8String;
+begin
+  Result := 'add_video.py';
+end;
+
+function TVideoAdder.LogFileName: UTF8String;
+begin
+  Result := 'video.log';
+end;
+
+function TVideoAdder.Add(const Txt, Source: UTF8String; WriteTags: boolean): boolean;
+var
+  Args: TStringList;
+begin
+  Result := false;
+  if State = gsRunning then
+    Exit;
+  fTxt := Txt;
+  fWrite := WriteTags;
+  Args := TStringList.Create;
+  Args.Add('--txt');
+  Args.Add(Txt);
+  Args.Add('--source');
+  Args.Add(Trim(Source));
+  if WriteTags then
+    Args.Add('--write');
+  Result := Launch(Source, Txt, Args);
+end;
+
+// "<file>\t<gap>\t<sure|unsure>" from add_video.py
+function TVideoAdder.ResultPart(Index: integer): UTF8String;
+var
+  Parts: TStringList;
+begin
+  Result := '';
+  Parts := TStringList.Create;
+  try
+    Parts.Delimiter := #9;
+    Parts.StrictDelimiter := true;
+    Parts.DelimitedText := ResultFile;
+    if Index < Parts.Count then
+      Result := Parts[Index];
+  finally
+    Parts.Free;
+  end;
+end;
+
+function TVideoAdder.VideoName: UTF8String;
+begin
+  Result := ResultPart(0);
+end;
+
+function TVideoAdder.VideoGap: real;
+var
+  FS: TFormatSettings;
+begin
+  FS := DefaultFormatSettings;
+  FS.DecimalSeparator := '.';
+  Result := StrToFloatDef(ResultPart(1), 0, FS);
+end;
+
+function TVideoAdder.GapSure: boolean;
+begin
+  Result := ResultPart(2) = 'sure';
+end;
+
+// the song menu's runs wrote the txt: its header is read again so the
+// song list shows the video
+procedure TVideoAdder.ApplyResult;
+var
+  FileName: IPath;
+  Song:     TSong;
+  I:        integer;
+begin
+  if not fWrite then
+    Exit;
+  if State <> gsDone then
+  begin
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_FAILED') + ': ' + Message);
+    Exit;
+  end;
+  FileName := Path(fTxt);
+  for I := 0 to Songs.SongList.Count - 1 do
+  begin
+    Song := TSong(Songs.SongList[I]);
+    if Song.Path.Append(Song.FileName).Equals(FileName, true) then
+    begin
+      Song.Analyse;
+      Break;
+    end;
+  end;
+  if GapSure then
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_DONE') + ': ' + VideoName)
+  else
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_UNSURE'));
+  Inc(fVersion);
+end;
+
 procedure StopSongGenerator;
 begin
   FreeAndNil(SongGenerator);
+  FreeAndNil(VideoAdder);
 end;
 
 end.

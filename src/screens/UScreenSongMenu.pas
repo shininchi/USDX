@@ -48,6 +48,10 @@ type
     private
       CurMenu: byte; // num of the cur. shown menu
       ID:       String; //for help-system
+      DropsOn: boolean; // files dropped onto the window are taken as the song's video
+      procedure AcceptDrops(Accept: boolean);
+      procedure AddVideo(const Source: UTF8String);
+      procedure AddCopiedVideoLink;
     public
       Visible: boolean; // whether the menu should be drawn
 
@@ -81,6 +85,7 @@ const
   SM_Song             = 64 or 8;
   SM_Medley           = 64 or 16;
   SM_Jukebox          = 64 or 128;
+  SM_Video            = 64 or 32;
 
 var
   ISelections1: array of UTF8String;
@@ -106,6 +111,7 @@ uses
   UPlaylist,
   URenderer,
   USong,
+  USongGenerator,
   USongRequests,
   USongRequestsOverlay,
   USongs,
@@ -164,8 +170,14 @@ begin
         begin
           StopTextInput;
           AudioPlayback.PlaySound(SoundLib.Back);
+          AcceptDrops(false);
           Visible := false;
         end;
+
+      SDLK_V:
+        // a link copied to the clipboard as the song's video
+        if (CurMenu = SM_Video) and ((SDL_GetModState and (KMOD_CTRL or KMOD_GUI)) <> 0) then
+          AddCopiedVideoLink;
 
       SDLK_TAB:
         begin
@@ -303,8 +315,61 @@ end;
 
 function TScreenSongMenu.Draw: boolean;
 begin
+  if (CurMenu = SM_Video) and (SongGeneratorDroppedFile <> '') then
+  begin
+    AddVideo(SongGeneratorDroppedFile);
+    SongGeneratorDroppedFile := '';
+  end;
   Renderer.ClearFrameBuffer(CLEAR_DEPTH);
   Result := inherited Draw;
+end;
+
+procedure TScreenSongMenu.AcceptDrops(Accept: boolean);
+begin
+  if Accept = DropsOn then
+    Exit;
+  DropsOn := Accept;
+  SongGeneratorDroppedFile := '';
+  if Accept then
+    SDL_EventState(SDL_DROPFILE, SDL_ENABLE)
+  else
+    SDL_EventState(SDL_DROPFILE, SDL_DISABLE);
+end;
+
+// Source: 'search' (YouTube, by the song's name), a link or a video file
+procedure TScreenSongMenu.AddVideo(const Source: UTF8String);
+var
+  Song: TSong;
+begin
+  AcceptDrops(false);
+  Visible := false;
+  Song := CatSongs.Song[ScreenSong.Interaction];
+  if VideoAdder = nil then
+    VideoAdder := TVideoAdder.Create;
+  if VideoAdder.State = gsRunning then
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_BUSY'))
+  else if VideoAdder.Add(Song.Path.Append(Song.FileName).ToNative, Source, true) then
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_STARTED') + ': ' + Song.Artist + ' - ' + Song.Title)
+  else
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_FAILED'));
+end;
+
+procedure TScreenSongMenu.AddCopiedVideoLink;
+var
+  Clip: PAnsiChar;
+  Link: UTF8String;
+begin
+  Link := '';
+  Clip := SDL_GetClipboardText();
+  if Clip <> nil then
+  begin
+    Link := Trim(UTF8String(Clip));
+    SDL_free(Clip);
+  end;
+  if Pos('http', LowerCase(Link)) = 1 then
+    AddVideo(Link)
+  else
+    SongRequestsShowNotice(Language.Translate('VIDEO_ADD_NO_LINK'));
 end;
 
 procedure TScreenSongMenu.OnShow;
@@ -350,6 +415,7 @@ var
 begin
   Interaction := 0; // reset interaction
   Visible := true;  // set visible
+  AcceptDrops(sMenu = SM_Video);
   case sMenu of
     SM_Main:
       begin
@@ -364,7 +430,9 @@ begin
         Button[1].Visible := true;
         Button[2].Visible := ((Length(PlaylistMedley.Song) > 0) or (CatSongs.Song[ScreenSong.Interaction].Medley.Source > msNone));
         Button[3].Visible := true;
-        Button[4].Visible := false;
+        // add a video to a song without one
+        Button[4].Visible := not CatSongs.Song[ScreenSong.Interaction].Main and
+          not CatSongs.Song[ScreenSong.Interaction].Video.IsSet;
         if not Button[0].Visible then
           Interaction := 1;
 
@@ -381,6 +449,28 @@ begin
         Button[1].Text[0].Text := Language.Translate('SONG_MENU_SONG');
         Button[2].Text[0].Text := Language.Translate('SONG_MENU_MEDLEY');
         Button[3].Text[0].Text := Language.Translate('SONG_MENU_REFRESH_SCORES');
+        Button[4].Text[0].Text := Language.Translate('SONG_MENU_VIDEO');
+      end;
+    SM_Video:
+      begin
+        ID := 'ID_017';
+        CurMenu := sMenu;
+        Text[0].Text := Language.Translate('SONG_MENU_NAME_VIDEO');
+
+        Button[0].Visible := true;
+        Button[1].Visible := true;
+        Button[2].Visible := true;
+        Button[3].Visible := false;
+        Button[4].Visible := true;
+
+        SelectsS[0].Visible := false;
+        SelectsS[1].Visible := false;
+        SelectsS[2].Visible := false;
+
+        Button[0].Text[0].Text := Language.Translate('SONG_MENU_VIDEO_SEARCH');
+        Button[1].Text[0].Text := Language.Translate('SONG_MENU_VIDEO_LINK');
+        Button[2].Text[0].Text := Language.Translate('SONG_MENU_VIDEO_DROP');
+        Button[4].Text[0].Text := Language.Translate('SONG_MENU_CANCEL');
       end;
     SM_Song:
       begin
@@ -826,7 +916,20 @@ begin
               ScreenSong.StopMusicPreview();
               ScreenSong.StopVideoPreview();
             end;
+
+          7: // button 5: add a video
+            MenuShow(SM_Video);
           end;
+      end;
+
+    SM_Video:
+      begin
+        case Interaction of
+          0: AddVideo('search');
+          1: AddCopiedVideoLink;
+          // 2: dropping a file is done with the mouse, see Draw
+          7: MenuShow(SM_Main);
+        end;
       end;
 
       SM_Song:

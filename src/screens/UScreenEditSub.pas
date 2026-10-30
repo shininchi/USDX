@@ -218,6 +218,7 @@ type
       VideoData:               Integer;
       VideoVal:                array of UTF8String;
       SlideVideoIndex:         Integer;
+      AddingVideo:             boolean;  // a video added with AddVideo is on its way
       // VideoGap header
       VideoGapSlideId:         Integer;
       VideoGapData:            Integer;
@@ -358,6 +359,10 @@ type
       procedure HandleDivideBPM(SDL_ModState: word);
       procedure HandleMultiplyBPM(SDL_ModState: word);
       procedure HandleVideo(SDL_ModState: word);
+      procedure UpdateVideoSlide;
+      procedure AddVideo(const Source: UTF8String);
+      procedure AddCopiedVideoLink;
+      procedure TakeAddedVideo;
       procedure HandlePaste(SDL_ModState: word);
       procedure HandleFixTimings(SDL_ModState: word);
       procedure HandleBPMIncrease(SDL_ModState: word);
@@ -486,11 +491,13 @@ uses
   UMenuInteract,
   UNote,
   USkins,
+  USongGenerator,
   UTextEncoding,
   UUnicodeUtils,
   UText;
 
 const
+  SUPPORTED_EXTS_VIDEO: array[0..11] of string = ('.avi', '.mov', '.divx', '.mkv', '.mpeg', '.mpg', '.mp4', '.mpeg', '.m2v', '.ts', '.webm', '.wmv');
   DEFAULT_FADE_IN_TIME  = 8;    //TODO in INI
   DEFAULT_FADE_OUT_TIME = 2;
   NOT_SET = '-';
@@ -607,7 +614,10 @@ begin
       SDLK_M: HandleMultiplyBPM(SDL_ModState);
       SDLK_C: CapitalizeLyrics(SDL_ModState);
       SDLK_V:
-        if (SDL_ModState = 0) or (SDL_ModState = KMOD_LALT) then HandleVideo(SDL_ModState)
+        // on the Video header, Cmd/Ctrl+V takes a copied link as the video
+        if (Interaction = VideoSlideId) and ((SDL_GetModState and (KMOD_CTRL or KMOD_GUI)) <> 0) then
+          AddCopiedVideoLink
+        else if (SDL_ModState = 0) or (SDL_ModState = KMOD_LALT) then HandleVideo(SDL_ModState)
         else HandlePaste(SDL_ModState);
       SDLK_T: HandleFixTimings(SDL_ModState);
       SDLK_H: if SDL_ModState = 0 then HideNotes := not HideNotes;
@@ -1728,6 +1738,13 @@ var
   LineIndex:    Integer;
   NoteIndex:    Integer;
 begin
+    // the Video header: look for the song's video on YouTube
+    if Interaction = VideoSlideId then
+    begin
+      AddVideo('search');
+      Exit;
+    end;
+
     if Interaction =  TitleSlideId then
     begin
       BackupEditText := CurrentSong.Title;
@@ -5656,17 +5673,107 @@ end;
 
 function TScreenEditSub.ExitScreen: PMenu;
 begin
+  // every way out asks for it: dropped files are no longer the song's video
+  SDL_EventState(SDL_DROPFILE, SDL_DISABLE);
   if BackScreen <> nil then
     Result := BackScreen
   else
     Result := @ScreenSong;
 end;
 
+// the video files in the song's folder as options of the Video header
+procedure TScreenEditSub.UpdateVideoSlide;
+var
+  Files:     TPathDynArray;
+  FileIndex: Integer;
+  Ext:       string;
+begin
+  SetLength(Files, 0);
+  SetLength(VideoVal, 0);
+  SlideVideoIndex := -1;
+  for Ext in SUPPORTED_EXTS_VIDEO do
+    Songs.FindFilesByExtension(Path(includeTrailingPathDelimiter(CurrentSong.Path.ToNative)), Path(Ext), true, Files);
+
+  for FileIndex := 0 to High(Files) do
+  begin
+    SetLength(VideoVal, High(VideoVal) + 2);
+    VideoVal[FileIndex] := ExtractFileName(Files[FileIndex].ToUTF8());
+    if UTF8CompareText(VideoVal[FileIndex], CurrentSong.Video.ToUTF8) = 0 then
+          SlideVideoIndex := FileIndex;
+  end;
+
+  if High(Files) < 0 then
+  begin
+    SetLength(VideoVal, 1);
+    VideoVal[0] := CurrentSong.Video.ToUTF8;
+    SlideVideoIndex := 0;
+  end;
+  UpdateSelectSlideOptions(VideoSlideId,VideoVal,SlideVideoIndex);
+end;
+
+// Source: 'search' (YouTube, by the song's name), a link or a video file;
+// the editor sets #VIDEO and #VIDEOGAP when it is done (see Draw), saved
+// with the song
+procedure TScreenEditSub.AddVideo(const Source: UTF8String);
+begin
+  if VideoAdder = nil then
+    VideoAdder := TVideoAdder.Create;
+  if VideoAdder.State = gsRunning then
+    Text[TextInfo].Text := Language.Translate('VIDEO_ADD_BUSY')
+  else if VideoAdder.Add(CurrentSong.Path.Append(CurrentSong.FileName).ToNative, Source, false) then
+  begin
+    AddingVideo := true;
+    Text[TextInfo].Text := Language.Translate('VIDEO_ADD_WORKING');
+  end
+  else
+    Text[TextInfo].Text := Language.Translate('VIDEO_ADD_FAILED');
+end;
+
+procedure TScreenEditSub.AddCopiedVideoLink;
+var
+  Clip: PAnsiChar;
+  Link: UTF8String;
+begin
+  Link := '';
+  Clip := SDL_GetClipboardText();
+  if Clip <> nil then
+  begin
+    Link := Trim(UTF8String(Clip));
+    SDL_free(Clip);
+  end;
+  if Pos('http', LowerCase(Link)) = 1 then
+    AddVideo(Link)
+  else
+    Text[TextInfo].Text := Language.Translate('VIDEO_ADD_NO_LINK');
+end;
+
+// the video added by AddVideo, once it is ready
+procedure TScreenEditSub.TakeAddedVideo;
+begin
+  if not AddingVideo or (VideoAdder = nil) or (VideoAdder.State = gsRunning) then
+    Exit;
+  AddingVideo := false;
+  if (VideoAdder.State <> gsDone) or
+     not Path(VideoAdder.Txt).Equals(CurrentSong.Path.Append(CurrentSong.FileName), true) then
+  begin
+    Text[TextInfo].Text := Language.Translate('VIDEO_ADD_FAILED') + ': ' + VideoAdder.Message;
+    Exit;
+  end;
+  CopyToUndo;
+  StopVideoPreview;
+  CurrentSong.Video := Path(VideoAdder.VideoName);
+  CurrentSong.VideoGAP := VideoAdder.VideoGap;
+  UpdateVideoSlide;
+  if VideoAdder.GapSure then
+    Text[TextInfo].Text := Format(Language.Translate('VIDEO_ADD_EDITOR_DONE'), [CurrentSong.VideoGAP])
+  else
+    Text[TextInfo].Text := Language.Translate('VIDEO_ADD_EDITOR_UNSURE');
+end;
+
 procedure TScreenEditSub.OnShow;
 const
   SUPPORTED_EXTS_AUDIO: array[0..4]  of string = ('.mp3', '.flac', '.wav', '.ogg', '.m4a');
   SUPPORTED_EXTS_IMAGE: array[0..1]  of string = ('.jpg', '.png');
-  SUPPORTED_EXTS_VIDEO: array[0..11] of string = ('.avi', '.mov', '.divx', '.mkv', '.mpeg', '.mpg', '.mp4', '.mpeg', '.m2v', '.ts', '.webm', '.wmv');
 var
   Files:       TPathDynArray;
   FileIndex:   Integer;
@@ -5689,6 +5796,9 @@ begin
   PlayOne := false;
   PlaySentenceMidi := false;
   Text[TextInfo].Text := '';
+  AddingVideo := false;
+  SongGeneratorDroppedFile := '';
+  SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
   Log.LogStatus('Initializing', 'TEditScreen.OnShow');
   LoadSingScreenTextures;
   Xmouse := 0;
@@ -5871,27 +5981,7 @@ begin
     UpdateSelectSlideOptions(BackgroundSlideId,BackgroundVal,SlideBackgroundIndex);
 
     // Header Video
-    SetLength(Files, 0);
-    SetLength(VideoVal, 0);
-    SlideVideoIndex := -1;
-    for Ext in SUPPORTED_EXTS_VIDEO do
-      Songs.FindFilesByExtension(Path(includeTrailingPathDelimiter(CurrentSong.Path.ToNative)), Path(Ext), true, Files);
-
-    for FileIndex := 0 to High(Files) do
-    begin
-      SetLength(VideoVal, High(VideoVal) + 2);
-      VideoVal[FileIndex] := ExtractFileName(Files[FileIndex].ToUTF8());
-      if UTF8CompareText(VideoVal[FileIndex], CurrentSong.Video.ToUTF8) = 0 then
-            SlideVideoIndex := FileIndex;
-    end;
-
-    if High(Files) < 0 then
-    begin
-      SetLength(VideoVal, 1);
-      VideoVal[0] := CurrentSong.Video.ToUTF8;
-      SlideVideoIndex := 0;
-    end;
-    UpdateSelectSlideOptions(VideoSlideId,VideoVal,SlideVideoIndex);
+    UpdateVideoSlide;
 
     // Header VideoGap
     SetLength(VideoGapVal, 1);
@@ -6142,6 +6232,14 @@ var
   {$ENDIF}
 begin
   SyncVolumeSlidersFromIni;
+
+  // a video file dropped onto the window becomes the song's video
+  if SongGeneratorDroppedFile <> '' then
+  begin
+    AddVideo(SongGeneratorDroppedFile);
+    SongGeneratorDroppedFile := '';
+  end;
+  TakeAddedVideo;
 
   {$IFDEF UseMIDIPort} // midi music
   if PlaySentenceMidi and Not (PlayOneMidi) then

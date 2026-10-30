@@ -436,6 +436,8 @@ begin
         SongRequests.Tick;
       if (SongGenerator <> nil) then
         SongGenerator.Tick;
+      if (VideoAdder <> nil) then
+        VideoAdder.Tick;
       PlayerSlotsTick;
 
       // display
@@ -613,7 +615,8 @@ begin
       end;
       SDL_DROPFILE:
         begin
-          // only enabled while the song generator screen is shown
+          // only enabled while the song generator screen, the song menu's
+          // video options or the editor are shown
           if Event.drop._file <> nil then
           begin
             SongGeneratorDroppedFile := UTF8String(Event.drop._file);
