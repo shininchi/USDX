@@ -724,6 +724,8 @@ begin
     Display.CheckOK := false;
 
     ScreenJukebox.RepeatSongList := false;
+    // the requests list always goes on with another song
+    ScreenJukebox.RequestsMode := false;
 
     ScreenJukebox.CurrentSongList := High(ScreenJukebox.JukeboxVisibleSongs);
 
