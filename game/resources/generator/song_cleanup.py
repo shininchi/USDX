@@ -279,6 +279,7 @@ def shorten_long_syllables(notes, beat_seconds):
 
 
 BREAK_AFTER_SECONDS = 2.0  # where a line break goes after the line's end
+BACKING_LINE_SECONDS = 1.0  # backing vocals this long get a line of their own
 
 
 def break_cost(prev_text, next_text, pause, in_exclamation):
@@ -595,16 +596,33 @@ def drop_stray_notes(notes, levels, gap, beat_seconds):
 def mark_backing_vocals(notes):
     """Backing vocals, written in parentheses in the lyrics ("(no lo es)"),
     as freestyle notes: shown in italics and not scored, as nobody is to
-    sing them. Returns the notes."""
-    inside = False
+    sing them. The held notes of the word that closes them ("uh) ~") are
+    theirs too. Returns the notes."""
+    inside = closing = False
     for note in notes:
         if "(" in note.text:
             inside = True
         if inside:
             note.kind = "F"
         if ")" in note.text:
-            inside = False
+            closing = True
+        if closing and note.ends_word:
+            inside = closing = False
     return notes
+
+
+def apart_backing_vocals(notes, beat_seconds):
+    """A line that ends with backing vocals, in a line of their own: the
+    game draws no bars for freestyle notes, so in the same line they would
+    leave the sung notes squeezed into its left side. A short one ("(no)")
+    stays, rather than show up for an instant. Returns the lines."""
+    k = len(notes)
+    while k > 0 and notes[k - 1].kind == "F":
+        k -= 1
+    if 0 < k < len(notes) and \
+            (notes[-1].end - notes[k].start) * beat_seconds >= BACKING_LINE_SECONDS:
+        return [notes[:k], notes[k:]]
+    return [notes]
 
 
 def without_late_holds(word, beat_seconds):
@@ -1054,12 +1072,16 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
     for line in lines:
         if line:
             line[-1] = without_late_holds(line[-1], beat_seconds)
-    for i, line in enumerate(lines):
+    shown = []
+    for line in lines:
         notes_of_line = [n for word in line for n in word]
-        out.extend(n.line() for n in mark_backing_vocals(join_vowel_syllables(notes_of_line, beat_seconds, split)))
-        if i < len(lines) - 1:
-            last = line[-1][-1]
-            following = lines[i + 1][0][0]
+        shown.extend(apart_backing_vocals(
+            mark_backing_vocals(join_vowel_syllables(notes_of_line, beat_seconds, split)), beat_seconds))
+    for i, line in enumerate(shown):
+        out.extend(n.line() for n in line)
+        if i < len(shown) - 1:
+            last = line[-1]
+            following = shown[i + 1][0]
             # the next line shows up 2 s after this one ends, as in most
             # songs, or halfway through a shorter pause
             pause = max(0, following.start - last.end)
