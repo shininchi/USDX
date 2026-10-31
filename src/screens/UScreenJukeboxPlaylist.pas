@@ -185,12 +185,13 @@ begin
   SetLength(IPlaylist2, 1);
   IPlaylist2[0] := '---';
 
-  SetLength(IPlaylist, 4);
+  SetLength(IPlaylist, 5);
 
   IPlaylist[0] := Language.Translate('PARTY_PLAYLIST_ALL');
   IPlaylist[1] := Language.Translate('PARTY_PLAYLIST_CATEGORY');
   IPlaylist[2] := Language.Translate('PARTY_PLAYLIST_PLAYLIST');
   IPlaylist[3] := Language.Translate('PARTY_PLAYLIST_MANUAL');
+  IPlaylist[4] := Language.Translate('JUKEBOX_PLAYLIST_REQUESTS');
 
   //Load Screen From Theme
   LoadFromTheme(Theme.JukeboxPlaylist);
@@ -247,7 +248,7 @@ begin
           IPlaylist2[0] := 'No Playlists found';
         end;
       end;
-    3:
+    3, 4:
       begin
         SetLength(IPlaylist2, 1);
         IPlaylist2[0] := '---';
@@ -281,6 +282,7 @@ begin
   ScreenJukebox.CurrentSongList := 0;
   ScreenJukebox.ListMin := 0;
   ScreenJukebox.Interaction := 0;
+  ScreenJukebox.RequestsMode := false;
 
   if PlayList = 0 then
   begin
@@ -336,6 +338,15 @@ begin
   if PlayList = 3 then
   begin
     FadeTo(@ScreenSong);
+  end;
+
+  // the song request queue, with new requests added while it plays
+  if PlayList = 4 then
+  begin
+    ScreenJukebox.RequestsMode := true;
+    ScreenJukebox.FillFromRequests(-1, -1);
+    ScreenJukebox.CurrentSongID := ScreenJukebox.JukeboxVisibleSongs[0];
+    FadeTo(@ScreenJukebox);
   end;
 
 end;

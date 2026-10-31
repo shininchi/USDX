@@ -59,6 +59,9 @@ procedure SongRequestsShowNotice(const Text: UTF8String);
 {* Forgets what was seen of the request list, after RestartSongRequests. *}
 procedure SongRequestsResetOverlay;
 
+{* Index in CatSongs of the song of a request key, -1 if it is not there. *}
+function SongRequestsFindCatSong(const Key: UTF8String): integer;
+
 implementation
 
 uses
@@ -114,6 +117,15 @@ begin
             (Display.CurrentScreen <> @ScreenEdit) and
             (Display.CurrentScreen <> @ScreenEditSub) and
             (Display.CurrentScreen <> @ScreenEditConvert);
+end;
+
+{* The QR code may also go over the jukebox, where it is there for whoever
+ * comes in: the jukebox lyrics are not sung, nor do they fill the screen. *}
+function QRAllowed: boolean;
+begin
+  Result := OverlayAllowed or
+            ((SongRequests <> nil) and SongRequests.Config.Enabled and
+             (Display.NextScreen = nil) and (Display.CurrentScreen = @ScreenJukebox));
 end;
 
 procedure GenerateQR;
@@ -175,7 +187,7 @@ begin
   // typing a name or a search term must still be possible
   if SDL_IsTextInputActive = SDL_TRUE then
     Exit;
-  if not OverlayAllowed then
+  if not QRAllowed then
     Exit;
 
   if Visible and (HiddenAt = 0) then
@@ -200,7 +212,7 @@ begin
   if not Visible then
     Exit;
 
-  if not OverlayAllowed then
+  if not QRAllowed then
   begin
     SongRequestsHideQR;
     Exit;
@@ -305,7 +317,7 @@ end;
 
 {* Index of the song in CatSongs; of a solo and a duet version of the same
  * song the duet version is preferred, like in the web client. *}
-function FindCatSong(const Key: UTF8String): integer;
+function SongRequestsFindCatSong(const Key: UTF8String): integer;
 var
   I: integer;
 begin
@@ -366,7 +378,7 @@ begin
   begin
     J := Order[(Start + I) mod Length(Order)];
     Entry := Entries[J];
-    Target := FindCatSong(Entry.Key);
+    Target := SongRequestsFindCatSong(Entry.Key);
     if Target < 0 then
       Continue; // not in the library any more
 
@@ -536,7 +548,7 @@ begin
     SetLength(Items, 0);
     for I := 0 to High(Entries) do
     begin
-      Target := FindCatSong(Entries[I].Key);
+      Target := SongRequestsFindCatSong(Entries[I].Key);
       if Target < 0 then
         Continue;
       N := Length(Items);

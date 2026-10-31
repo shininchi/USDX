@@ -194,6 +194,11 @@ type
     JukeboxSongsList:     array of integer;
     JukeboxVisibleSongs:  array of integer;
 
+    // "Requests" list: the song request queue, kept up to date
+    RequestsMode:        boolean;
+    RequestsVersion:     integer;
+    RequestsQueue:       UTF8String; // the queue's songs when the list was made
+
     ActualInteraction:   integer;
     ListMin:             integer;
     CurrentSongID:       integer;
@@ -239,6 +244,7 @@ type
     procedure Reset;
 
     procedure AddSongToJukeboxList(ID: integer);
+    procedure FillFromRequests(Keep, Avoid: integer);
     function FinishedMusic: boolean;
 
     procedure RefreshCover;
@@ -284,6 +290,8 @@ uses
   USkins,
   UScreenJukeboxOptions,
   USong,
+  USongRequests,
+  USongRequestsOverlay,
   UUnicodeUtils,
   Classes,
   Math;
@@ -301,6 +309,16 @@ const
   MAX_TIME_SONGMENU = 3000; // msec
 
   MAX_TIME_SONGOPTIONS = 3000; // msec
+
+{* The songs of the request queue, in order, to see if they changed. *}
+function QueueKeys(const Entries: TSRQueueEntries): UTF8String;
+var
+  I: integer;
+begin
+  Result := '';
+  for I := 0 to High(Entries) do
+    Result := Result + Entries[I].Key + #10;
+end;
 
 procedure TScreenJukebox.DrawMoveLine();
 begin
@@ -2173,6 +2191,11 @@ begin
 
   LyricsState.UpdateBeats();
 
+  // the song request web client shows what is playing
+  if (SongRequests <> nil) then
+    SongRequests.SetNowPlaying(CurrentSong.Artist, CurrentSong.Title, '',
+      LyricsState.GetCurrentTime(), LyricsState.TotalTime);
+
   // synchronize music
     if (Ini.SyncTo = Ord(stLyrics)) then
       AudioPlayback.SetSyncSource(fLyricsSync)
@@ -2202,6 +2225,9 @@ end;
 
 procedure TScreenJukebox.OnHide;
 begin
+  if (SongRequests <> nil) then
+    SongRequests.ClearNowPlaying;
+  RequestsMode := false;
   FreeAndNil(Tex_Background);
   if fShowWebcam then
         begin
@@ -2227,6 +2253,16 @@ var
   CurLyricsTime: real;
   VideoFrameTime: Extended;
 begin
+  // new requests, votes or withdrawals change what plays next (the version
+  // also changes with every visit of a guest)
+  if RequestsMode and (SongRequests <> nil) and (SongRequests.Version <> RequestsVersion) then
+  begin
+    RequestsVersion := SongRequests.Version;
+    if (QueueKeys(SongRequests.QueueSnapshot) <> RequestsQueue) and
+       (CurrentSongList <= High(JukeboxVisibleSongs)) then
+      FillFromRequests(JukeboxVisibleSongs[CurrentSongList], -1);
+  end;
+
   Renderer.ClearFrameBuffer(CLEAR_COLOR or CLEAR_DEPTH);
   Background.Draw;
 
@@ -2399,6 +2435,17 @@ begin
 
   SetFontItalic(false);
 
+  if RequestsMode then
+  begin
+    if CurrentSongList <= High(JukeboxVisibleSongs) then
+      FillFromRequests(-1, JukeboxVisibleSongs[CurrentSongList])
+    else
+      FillFromRequests(-1, -1);
+    CatSongs.Selected := JukeboxVisibleSongs[0];
+    PlayMusic(0, false);
+    Exit;
+  end;
+
   if (CurrentSongList = High(JukeboxVisibleSongs)) then
   begin
     if (RepeatSongList) then
@@ -2475,6 +2522,53 @@ begin
   end;
 end;
 
+{* The "Requests" list: Keep (the song playing, -1 for none) and then the
+ * requested songs in queue order. With nothing requested a random song
+ * plays, other than Avoid (the one that just played), until somebody asks
+ * for one. *}
+procedure TScreenJukebox.FillFromRequests(Keep, Avoid: integer);
+var
+  Entries: TSRQueueEntries;
+  I, ID:   integer;
+begin
+  SetLength(JukeboxSongsList, 0);
+  SetLength(JukeboxVisibleSongs, 0);
+  if Keep >= 0 then
+    AddSongToJukeboxList(Keep);
+  if SongRequests <> nil then
+  begin
+    RequestsVersion := SongRequests.Version;
+    Entries := SongRequests.QueueSnapshot;
+    RequestsQueue := QueueKeys(Entries);
+    for I := 0 to High(Entries) do
+    begin
+      ID := SongRequestsFindCatSong(Entries[I].Key);
+      if ID >= 0 then
+        AddSongToJukeboxList(ID);
+    end;
+  end;
+
+  if Length(JukeboxVisibleSongs) = 0 then
+  begin
+    for I := 1 to 50 do
+    begin
+      ID := Random(Length(CatSongs.Song));
+      if not CatSongs.Song[ID].Main and (ID <> Avoid) then
+      begin
+        AddSongToJukeboxList(ID);
+        Break;
+      end;
+    end;
+    for I := 0 to High(CatSongs.Song) do
+      if Length(JukeboxVisibleSongs) = 0 then
+        AddSongToJukeboxList(I);
+  end;
+
+  CurrentSongList := 0;
+  ActualInteraction := 0;
+  ListMin := 0;
+end;
+
 procedure TScreenJukebox.DrawSongInfo();
 var
   I: integer;
@@ -2529,6 +2623,10 @@ begin
     if high(JukeboxVisibleSongs) < 0 then
        Finish;
     CurrentSong := CatSongs.Song[JukeboxVisibleSongs[ID]];
+    // a requested song leaves the request queue when it starts playing
+    if RequestsMode and (SongRequests <> nil) and
+       SongRequests.IsRequested(CurrentSong.Artist, CurrentSong.Title) then
+      SongRequests.MarkSung(CurrentSong.Artist, CurrentSong.Title);
     Text[JukeboxTextActualSongArtist].Text := CurrentSong.Artist;
     Text[JukeboxTextActualSongTitle].Text := CurrentSong.Title;
 
