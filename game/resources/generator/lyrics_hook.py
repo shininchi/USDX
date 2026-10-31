@@ -603,12 +603,14 @@ def squeezed_word(audio, start, end, before=""):
 
 VOICE_GONE_SECONDS = 0.5  # the voice silent this long ends a line's last word
 BLIP_FRAMES = 5           # voiced runs shorter than this (10 ms frames) are breaths, clicks
+LEAP_HELD_SECONDS = 0.3  # the voice before such a leap held this long (a shorter run may be a pitch-tracker octave slip)
 BACKING_GAP_SECONDS = 3.0  # backing vocals ("no~, no~") may pause this long between their words
 
 
 def voiced_runs(audio, start, end):
-    """(start, end) in seconds of each stretch the voice sings in, by its
-    pitch (the level counts reverb and backing voices); None if unknown."""
+    """(start, end, semitones) of each stretch the voice sings in, by its
+    pitch (the level counts reverb and backing voices), with its median
+    pitch; None if unknown."""
     if audio is None or end - start < 0.2:
         return None
     try:
@@ -619,7 +621,8 @@ def voiced_runs(audio, start, end):
     except Exception as e:  # aligning still works without it
         print("[lyrics] no pitch: %s" % e, flush=True)
         return None
-    sung = list(~np.isnan(np.where(voiced, f0, np.nan)))
+    semis = 12 * np.log2(np.where(voiced, f0, np.nan) / 440.0)
+    sung = list(~np.isnan(semis))
     runs, k = [], 0
     while k < len(sung):
         if not sung[k]:
@@ -629,21 +632,61 @@ def voiced_runs(audio, start, end):
         while k < len(sung) and sung[k]:
             k += 1
         if k - a >= BLIP_FRAMES:
-            runs.append((start + a / 100.0, start + k / 100.0))
+            runs.append((start + a / 100.0, start + k / 100.0, float(np.median(semis[a:k]))))
     return runs
 
 
-def phrase_end(runs, gap):
+def phrase_end(runs, gap, leaps=True):
     """Where the first of the runs, and those that follow it closer than
-    gap seconds, end; None without runs."""
+    gap seconds, end; also at a shorter break after which the sound is
+    LEAP_SEMITONES away (an instrument or a backing voice an octave above:
+    Collar's "gula~ [D5]"), unless not leaps. None without runs."""
     if not runs:
         return None
-    end = runs[0][1]
-    for a, b in runs[1:]:
-        if a - end >= gap:
+    end, pitch, held = runs[0][1], runs[0][2], runs[0][1] - runs[0][0]
+    for a, b, semis in runs[1:]:
+        if a - end >= gap or (leaps and a - end >= PAUSE_SECONDS and held >= LEAP_HELD_SECONDS and
+                              abs(semis - pitch) >= LEAP_SEMITONES):
             break
-        end = b
+        end, pitch, held = b, semis, b - a
     return end
+
+
+VOWEL_LETTERS = "aeiouáéíóúü"
+
+
+def synalepha(before, word):
+    """Whether word is sung in one syllable with the end of the word
+    before it: a vowel meets a vowel (or a silent "h" before one)."""
+    a = re.sub(r"[^\w]", "", before.lower())
+    b = re.sub(r"[^\w]", "", word.lower())
+    if b[:1] == "h":
+        b = b[1:]
+    return a[-1:] in VOWEL_LETTERS + "y" and b[:1] in VOWEL_LETTERS
+
+
+def joined_before_last(words):
+    """One-syllable words before a line's last word, sung joined to the
+    word before them ("orgu-llo‿a‿un la~~do"), which the aligner does not
+    find (one of them gets an instant) and puts on the last word's held
+    note, pushing the last word to its end: they go to the end of the word
+    they are joined to, and the last word starts where the first of them
+    was."""
+    k = len(words) - 1
+    while k > 1 and vowel_groups(words[k - 1].get("word", "")) == 1 and \
+            synalepha(words[k - 2].get("word", ""), words[k - 1].get("word", "")):
+        k -= 1
+    if k == len(words) - 1 or \
+            not any(w["end"] - w["start"] < SQUEEZED_SECONDS for w in words[k:-1]):
+        return
+    joined, before, last = words[k:-1], words[k - 1], words[-1]
+    last["start"] = joined[0]["start"]
+    step = min(0.04, (before["end"] - before["start"]) / (len(joined) + 1))
+    t = before["end"] - step * len(joined)
+    before["end"] = round(t, 3)
+    for w in joined:
+        w["start"], w["end"] = round(t, 3), round(t + step, 3)
+        t += step
 
 
 def place_backing(main_last, group, runs, next_start):
@@ -661,7 +704,7 @@ def place_backing(main_last, group, runs, next_start):
     after = [r for r in runs if r[0] >= word_end + 0.05 and r[0] < next_start - 0.1]
     main_last["end"] = round(max(main_last["start"] + 0.1, word_end), 3)
     begin = after[0][0] if after else main_last["end"] + 0.05
-    end = min(phrase_end(after, BACKING_GAP_SECONDS) or begin + 0.4 * len(group), next_start - 0.02)
+    end = min(phrase_end(after, BACKING_GAP_SECONDS, leaps=False) or begin + 0.4 * len(group), next_start - 0.02)
     if end - begin < 0.1 * len(group):
         end = min(next_start - 0.02, begin + 0.3 * len(group))
     weights = [len(w["word"]) + 1 for w in group]
@@ -715,6 +758,7 @@ def trim_line_edges(aligned, levels, audio=None):
         group = words[backing:] if backing else []
         words = words[:backing] if backing else words
         first, last = words[0], words[-1]
+        joined_before_last(words)
         if len(words) > 1 and last["end"] - last["start"] < SQUEEZED_SECONDS:
             sung = squeezed_word(audio, words[-2]["start"], last["end"], words[-2].get("word", ""))
             if sung is not None:
