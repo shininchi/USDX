@@ -55,7 +55,10 @@ type
       PlayList:  integer;
       PlayList2: integer;
 
+      RequestsHint: integer; // what the list does with the song requests
+
       procedure SetPlaylists;
+      procedure UpdateRequestsHint;
     public
       constructor Create; override;
       function ParseInput(PressedKey: cardinal; CharCode: UCS4Char; PressedDown: boolean): boolean; override;
@@ -78,6 +81,7 @@ uses
   ULog,
   UParty,
   USong,
+  USongRequests,
   UPlaylist,
   USongs,
   UUnicodeUtils;
@@ -204,7 +208,22 @@ begin
   Theme.JukeboxPlaylist.SelectPlayList2.showArrows := true;
   SelectPlayList2 := AddSelectSlide(Theme.JukeboxPlaylist.SelectPlayList2, PlayList2, IPlaylist2);
 
+  RequestsHint := AddText(70, 240, 660, 120, 0, 0, 24, 1, 1, 1, 0, '', false, 0, 0, false);
+
   Interaction := 0;
+end;
+
+{* The requests list uses up the request queue, the others leave it for
+ * singing later: a jukebox to wait while guests come in with the QR code
+ * must not be the requests list. *}
+procedure TScreenJukeboxPlaylist.UpdateRequestsHint;
+begin
+  if (SongRequests = nil) or not SongRequests.Config.Enabled then
+    Text[RequestsHint].Text := ''
+  else if PlayList = 4 then
+    Text[RequestsHint].Text := Language.Translate('JUKEBOX_PLAYLIST_REQUESTS_HINT')
+  else
+    Text[RequestsHint].Text := Language.Translate('JUKEBOX_PLAYLIST_WAIT_HINT');
 end;
 
 procedure TScreenJukeboxPlaylist.SetPlaylists;
@@ -257,6 +276,7 @@ begin
 
   Playlist2 := 0;
   UpdateSelectSlideOptions(SelectPlayList2, IPlaylist2, Playlist2);
+  UpdateRequestsHint;
 end;
 
 procedure TScreenJukeboxPlaylist.OnShow;
@@ -265,6 +285,8 @@ begin
 
   if not Help.SetHelpID(ID) then
     Log.LogError('No Entry for Help-ID ' + ID + ' (ScreenJukeboxPlaylist)');
+
+  UpdateRequestsHint;
 
 end;
 
