@@ -625,6 +625,78 @@ def apart_backing_vocals(notes, beat_seconds):
     return [notes]
 
 
+GOLDEN_PER_MINUTE = 3.0  # as in SingStar's charts: 2.6 to 3.7 a minute
+GOLDEN_MIN_SECONDS = 0.25  # golden notes are held ones (SingStar median 0.35 s)
+GOLDEN_VOICED = 0.8      # share of a golden note's frames with the voice heard
+GOLDEN_ON_PITCH = 0.7    # share of them within a semitone of its pitch
+
+
+def golden_choices(line, track, gap, beat_seconds):
+    """The notes of a line that may be golden, best first: the longest and
+    the highest of the line, as SingStar picks 82% of the time, then the
+    next longest, if they are held and their pitch is sure to be the one
+    sung, so that nobody loses the bonus over a pitch we got wrong."""
+    import numpy as np
+    sung = [n for n in line if n.kind == ":"]
+    if not sung:
+        return []
+
+    def sure(note):
+        if note.length * beat_seconds < GOLDEN_MIN_SECONDS:
+            return False
+        a = int((gap + note.start * beat_seconds) / PITCH_FRAME)
+        b = int((gap + note.end * beat_seconds) / PITCH_FRAME)
+        frames = track[max(0, a):max(0, b)]
+        heard = frames[~np.isnan(frames)]
+        if len(frames) == 0 or len(heard) < GOLDEN_VOICED * len(frames):
+            return False
+        off = np.abs((heard - 48 - note.pitch + 6) % 12 - 6)  # the game scores any octave
+        return np.mean(off <= 1) >= GOLDEN_ON_PITCH
+
+    longest = max(n.length for n in sung)
+    highest = max(n.pitch for n in sung)
+    ranked = sorted(sung, key=lambda n: (n.length != longest and n.pitch != highest, -n.length))
+    return [n for n in ranked[:3] if sure(n)]
+
+
+def mark_golden_notes(lines, track, gap, beat_seconds):
+    """Golden notes the way SingStar places them in its charts: about three
+    a minute, spread evenly over the song, one held note in a line and
+    never in the next line nor in the first. The same line sung again gets
+    its golden note in another place when it can. Returns the lines."""
+    choices = [golden_choices(line, track, gap, beat_seconds) if i else [] for i, line in enumerate(lines)]
+    sung = [n for line in lines for n in line if n.kind == ":"]
+    if not sung:
+        return lines
+    first, last = sung[0].start, sung[-1].end
+    count = max(1, round((last - first) * beat_seconds / 60 * GOLDEN_PER_MINUTE))
+    slot = (last - first) / count
+    chosen = set()
+    after = first  # golden notes are at least half a slot apart
+    used = {}  # a line's text: the places of its golden notes so far
+    for k in range(count):
+        lo, hi = first + k * slot, first + (k + 1) * slot
+        best = None
+        for i, options in enumerate(choices):
+            if not options or i - 1 in chosen or i + 1 in chosen or not lo <= lines[i][0].start < hi:
+                continue
+            options = [n for n in options if n.start >= after]
+            if not options:
+                continue
+            key = "".join(n.text for n in lines[i]).strip().lower()
+            places = used.get(key, set())
+            fresh = [n for n in options if lines[i].index(n) not in places] or options
+            if best is None or fresh[0].length > best[1].length:
+                best = (i, fresh[0], key)
+        if best:
+            i, note, key = best
+            note.kind = "*"
+            chosen.add(i)
+            after = note.start + slot / 2
+            used.setdefault(key, set()).add(lines[i].index(note))
+    return lines
+
+
 def without_late_holds(word, beat_seconds):
     """The last word of a line, stretched by the aligner over what follows
     the voice, keeps notes of reverb or of instruments left in the vocals
@@ -1077,6 +1149,8 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
         notes_of_line = [n for word in line for n in word]
         shown.extend(apart_backing_vocals(
             mark_backing_vocals(join_vowel_syllables(notes_of_line, beat_seconds, split)), beat_seconds))
+    if pitch_track is not None:
+        mark_golden_notes(shown, pitch_track, gap_ms / 1000.0, beat_seconds)
     for i, line in enumerate(shown):
         out.extend(n.line() for n in line)
         if i < len(shown) - 1:
