@@ -42,7 +42,9 @@ STAGES = [
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 # header tags whose value comes from the generated file, not the old one
-REPLACED_TAGS = {"VERSION", "BPM", "GAP", "ENCODING", "RELATIVE", "NOTESGAP"}
+# the medley's beats are those of the old notes; set_chorus_tags finds them again
+REPLACED_TAGS = {"VERSION", "BPM", "GAP", "ENCODING", "RELATIVE", "NOTESGAP",
+                 "MEDLEYSTARTBEAT", "MEDLEYENDBEAT"}
 
 # better word timing than the small default models of whisperx
 ALIGN_MODELS = {
@@ -572,21 +574,29 @@ END_AFTER_SECONDS = 1.0  # the song ends this long after the quiet starts
 SILENCE_DB = -60        # quieter than this is silence
 
 
-def quiet_ending(audio, ffmpeg_dir):
-    """Where the quiet that lasts to the end of the audio starts (s): silence,
-    or the noise after the music of a recording made live or for a video.
-    None if the audio does not end that way."""
+def loudness(audio, ffmpeg_dir, per_second):
+    """The audio's loudness in dB, per_second values a second; None if it
+    cannot be read."""
     ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg") if ffmpeg_dir else "ffmpeg"
     try:
         import numpy as np
         raw = subprocess.run([ffmpeg, "-v", "error", "-i", audio, "-ac", "1", "-ar", "8000",
                               "-f", "s16le", "-"], capture_output=True, timeout=120).stdout
         x = np.frombuffer(raw, dtype=np.int16).astype(np.float64) / 32768.0
-        seconds = x[:len(x) // 8000 * 8000].reshape(-1, 8000)
-        db = 10 * np.log10((seconds ** 2).mean(axis=1) + 1e-12)
+        size = 8000 // per_second
+        windows = x[:len(x) // size * size].reshape(-1, size)
+        return 10 * np.log10((windows ** 2).mean(axis=1) + 1e-12)
     except Exception:
         return None
-    if len(db) < 30:
+
+
+def quiet_ending(audio, ffmpeg_dir):
+    """Where the quiet that lasts to the end of the audio starts (s): silence,
+    or the noise after the music of a recording made live or for a video.
+    None if the audio does not end that way."""
+    import numpy as np
+    db = loudness(audio, ffmpeg_dir, 1)
+    if db is None or len(db) < 30:
         return None
     # silence: the last chord rings out into it, as quiet as such noise
     k = len(db)
@@ -621,6 +631,153 @@ def set_end_at_silence(txt, ffmpeg_dir):
     sung_until = tag_value(header, "GAP") / 1000.0 + last * 60.0 / (bpm * 4)
     end = max(silence, sung_until) + END_AFTER_SECONDS
     header.append("#END:%d" % round(end * 1000))
+    with open(txt, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(header + body) + "\n")
+
+
+START_QUIET_SECONDS = 3.0   # silence or noise this long before the music is skipped with #START
+START_BEFORE_SECONDS = 0.5  # the song starts this long before the music
+START_STEP = 10             # loudness values a second to find where the music starts
+
+
+def quiet_start(audio, ffmpeg_dir):
+    """Where the music starts (s) after the silence or noise that a video
+    often has first (a title, people talking), None if the audio starts
+    with the music."""
+    import numpy as np
+    db = loudness(audio, ffmpeg_dir, START_STEP)
+    if db is None or len(db) < 30 * START_STEP:
+        return None
+    # over half a second, so a click does not start it
+    half = START_STEP // 2
+    smooth = np.array([np.median(db[i:i + half]) for i in range(len(db))])
+    quiet = max(SILENCE_DB, np.median(db) - END_QUIET_DB)
+    k = int(np.argmax(smooth >= quiet))
+    return k / START_STEP if k >= START_QUIET_SECONDS * START_STEP else None
+
+
+def set_start_at_silence(txt, ffmpeg_dir):
+    """Starts a song that starts with silence or noise where the music
+    starts, with #START; a #START already there is kept."""
+    header, body = split_song(read_text(txt))
+    tags = {tag_of(l): l.split(":", 1)[1].strip() for l in header if ":" in l}
+    audio = tags.get("AUDIO") or tags.get("MP3")
+    bpm = tag_value(header, "BPM")
+    if "START" in tags or not audio or bpm <= 0:
+        return
+    music = quiet_start(os.path.join(os.path.dirname(txt), audio), ffmpeg_dir)
+    if music is None:
+        return
+    first = min((int(l.split()[1]) for l in body if l[:1] in ":*FRG" and len(l.split()) >= 4), default=0)
+    sung_from = tag_value(header, "GAP") / 1000.0 + first * 60.0 / (bpm * 4)
+    start = min(music, sung_from) - START_BEFORE_SECONDS
+    if start >= START_QUIET_SECONDS - START_BEFORE_SECONDS:
+        set_tags(txt, {"START": "%.2f" % start})
+
+
+CHORUS_MIN_LINES = 2    # lines sung again in the same order that make a chorus
+SAME_LINE = 0.8         # lines this alike are the same line ("…la luz, oh oh")
+MEDLEY_MIN_SECONDS = 30.0  # a medley part shorter than this goes on with the next lines
+MEDLEY_MAX_PAUSE = 4.0  # but not over a pause this long
+
+
+def song_lines(header, body):
+    """(start beat, end beat, text) of each line with sung notes, its text
+    without what is not sung (backing vocals) nor punctuation."""
+    lines, cur = [], []
+    for l in body + ["-"]:
+        if l[:1] in ":*RG" and len(l.split()) >= 4:
+            p = l.split(" ", 4)
+            cur.append((int(p[1]), int(p[2]), p[4] if len(p) > 4 else ""))
+        elif l[:1] in "-E" and cur:
+            text = re.sub(r"[^\w]", "", "".join(t for _s, _l, t in cur).lower())
+            lines.append((cur[0][0], cur[-1][0] + cur[-1][1], text))
+            cur = []
+    return lines
+
+
+def chorus(lines):
+    """(first, last) line of the first time the chorus is sung: the longest
+    run of lines sung again later in the same order, from the first time its
+    first lines are sung. None if no lines are sung again so."""
+    import difflib
+
+    def same(a, b):
+        return a and b and (a == b or difflib.SequenceMatcher(None, a, b).ratio() >= SAME_LINE)
+
+    best = None
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            k = 0
+            while j + k < len(lines) and i + k < j and same(lines[i + k][2], lines[j + k][2]):
+                k += 1
+            if k >= CHORUS_MIN_LINES and (best is None or k > best[1]):
+                best = (i, k)
+    if not best:
+        return None
+    # the first chorus is often shorter than the later ones: it starts with
+    # the same lines, and goes on as long as it is the same
+    i, k = best
+    for p in range(i):
+        if all(same(lines[p + t][2], lines[i + t][2]) for t in range(CHORUS_MIN_LINES)):
+            n = CHORUS_MIN_LINES
+            while n < k and p + n < i and same(lines[p + n][2], lines[i + n][2]):
+                n += 1
+            return p, p + n - 1
+    return i, i + k - 1
+
+
+def set_chorus_tags(txt):
+    """The song list plays a song from its chorus (#PREVIEWSTART), and the
+    medley plays its first chorus (#MEDLEYSTARTBEAT, #MEDLEYENDBEAT), for
+    at least 30 s. The game guesses them only with four lines or more
+    written exactly the same. Tags already there are kept."""
+    header, body = split_song(read_text(txt))
+    tags = {tag_of(l) for l in header}
+    bpm = tag_value(header, "BPM")
+    if {"PREVIEWSTART", "MEDLEYSTARTBEAT", "MEDLEYENDBEAT"} <= tags or bpm <= 0:
+        return
+    lines = song_lines(header, body)
+    found = chorus(lines)
+    if not found:
+        return
+    beat = 60.0 / (bpm * 4)
+    first, last = found
+    while last + 1 < len(lines) and (lines[last][1] - lines[first][0]) * beat < MEDLEY_MIN_SECONDS \
+            and (lines[last + 1][0] - lines[last][1]) * beat < MEDLEY_MAX_PAUSE:
+        last += 1
+    values = {}
+    if "PREVIEWSTART" not in tags:
+        values["PREVIEWSTART"] = "%.2f" % (tag_value(header, "GAP") / 1000.0 + lines[first][0] * beat)
+    if not tags & {"MEDLEYSTARTBEAT", "MEDLEYENDBEAT"}:
+        values.update(MEDLEYSTARTBEAT=str(lines[first][0]), MEDLEYENDBEAT=str(lines[last][1]))
+    if values:
+        set_tags(txt, values)
+
+
+def save_instrumental(txt, no_vocals, ffmpeg_dir):
+    """The song without the voice, from the separation that found the notes,
+    for the game's karaoke: with #INSTRUMENTAL it lowers the singer as much
+    as the vocals volume option says."""
+    if not no_vocals:
+        return
+    ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg") if ffmpeg_dir else "ffmpeg"
+    name = os.path.splitext(os.path.basename(txt))[0] + " [Instrumental].mp3"
+    try:
+        subprocess.run([ffmpeg, "-v", "error", "-y", "-i", no_vocals, "-codec:a", "libmp3lame",
+                        "-q:a", "2", os.path.join(os.path.dirname(txt), name)],
+                       check=True, capture_output=True, timeout=300)
+    except Exception as e:  # the song works without it
+        print("No instrumental: %s" % e, flush=True)
+        return
+    set_tags(txt, {"INSTRUMENTAL": name})
+
+
+def set_tags(txt, values):
+    """Writes these tags, in place of the same ones if already there."""
+    header, body = split_song(read_text(txt))
+    header = [l for l in header if tag_of(l) not in values]
+    header += ["#%s:%s" % (tag, value) for tag, value in values.items()]
     with open(txt, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(header + body) + "\n")
 
@@ -869,6 +1026,10 @@ def main():
         txt = find_txt(work)
         say("@@STAGE write")
         clean_up_song(txt, find_file(work, "vocals.wav"), lyrics, os.path.join(work, CHAR_TIMES))
+        # out of UltraSinger's cache, which a new song's folder loses
+        no_vocals = find_file(work, "no_vocals.wav")
+        if no_vocals:
+            no_vocals = shutil.move(no_vocals, os.path.join(work, "no_vocals.wav"))
         if args.replace:
             result = replace_notes(args.replace, txt)
         else:
@@ -897,6 +1058,9 @@ def main():
                 f.write("\n".join(plain_lyrics(lyrics)) + "\n")
         set_origin_comment(result, source, lyrics)
         set_end_at_silence(result, args.ffmpeg)
+        set_start_at_silence(result, args.ffmpeg)
+        set_chorus_tags(result)
+        save_instrumental(result, no_vocals, args.ffmpeg)
         write_heard_lyrics(result, find_file(work, "vocals.wav"))
         say("@@DONE " + result)
     except KeyboardInterrupt:
