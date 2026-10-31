@@ -601,6 +601,77 @@ def squeezed_word(audio, start, end, before=""):
     return None
 
 
+VOICE_GONE_SECONDS = 0.5  # the voice silent this long ends a line's last word
+BLIP_FRAMES = 5           # voiced runs shorter than this (10 ms frames) are breaths, clicks
+BACKING_GAP_SECONDS = 3.0  # backing vocals ("no~, no~") may pause this long between their words
+
+
+def voiced_runs(audio, start, end):
+    """(start, end) in seconds of each stretch the voice sings in, by its
+    pitch (the level counts reverb and backing voices); None if unknown."""
+    if audio is None or end - start < 0.2:
+        return None
+    try:
+        import librosa
+        import numpy as np
+        y = np.asarray(audio[int(start * 16000):int(end * 16000)], dtype=np.float32)
+        f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=1000, sr=16000, frame_length=1024, hop_length=160)
+    except Exception as e:  # aligning still works without it
+        print("[lyrics] no pitch: %s" % e, flush=True)
+        return None
+    sung = list(~np.isnan(np.where(voiced, f0, np.nan)))
+    runs, k = [], 0
+    while k < len(sung):
+        if not sung[k]:
+            k += 1
+            continue
+        a = k
+        while k < len(sung) and sung[k]:
+            k += 1
+        if k - a >= BLIP_FRAMES:
+            runs.append((start + a / 100.0, start + k / 100.0))
+    return runs
+
+
+def phrase_end(runs, gap):
+    """Where the first of the runs, and those that follow it closer than
+    gap seconds, end; None without runs."""
+    if not runs:
+        return None
+    end = runs[0][1]
+    for a, b in runs[1:]:
+        if a - end >= gap:
+            break
+        end = b
+    return end
+
+
+def place_backing(main_last, group, runs, next_start):
+    """Backing vocals written in parentheses after a line ("acumulan (no lo
+    es)"), which the aligner squeezes into an instant at the line's end and
+    the last word held over them: the last word ends at the first break in
+    its voice, and they are sung from the voice after it to where it stops
+    before the next line (or, without voice there, right after the word),
+    shared by length."""
+    if not runs:
+        return
+    word_end = phrase_end([r for r in runs if r[1] > main_last["start"] + 0.2], PAUSE_SECONDS)
+    if word_end is None or word_end >= next_start - 0.2:
+        return
+    after = [r for r in runs if r[0] >= word_end + 0.05 and r[0] < next_start - 0.1]
+    main_last["end"] = round(max(main_last["start"] + 0.1, word_end), 3)
+    begin = after[0][0] if after else main_last["end"] + 0.05
+    end = min(phrase_end(after, BACKING_GAP_SECONDS) or begin + 0.4 * len(group), next_start - 0.02)
+    if end - begin < 0.1 * len(group):
+        end = min(next_start - 0.02, begin + 0.3 * len(group))
+    weights = [len(w["word"]) + 1 for w in group]
+    t = begin
+    for w, weight in zip(group, weights):
+        w["start"] = round(t, 3)
+        t += (end - begin) * weight / float(sum(weights))
+        w["end"] = round(t, 3)
+
+
 def vocal_levels(audio):
     """Level in dB (0 = the loudest) of each 10 ms of the (16 kHz) vocals."""
     try:
@@ -619,16 +690,30 @@ def trim_line_edges(aligned, levels, audio=None):
     the next line (which UltraSinger then pushes later, word after word):
     they are cut to where the voice sounds. An effect on the voice (echo,
     reverb) sounds on long after the singing: the last word also ends where
-    it fades well below its own peak, which a held note does not."""
+    it fades well below its own peak, which a held note does not, and where
+    the voice stops for VOICE_GONE_SECONDS (what is sung after that, ad-libs
+    or backing voices, is not the word: Collar's "apretado~" took 12 s).
+    Backing vocals in parentheses at a line's end go after its last word
+    (see place_backing)."""
     def level(t):
         f = int(t * 100)
         return levels[f] if 0 <= f < len(levels) else VOICE_DB - 1
 
     def sounds(t):
         return level(t) > VOICE_DB
-    lines = [[w for w in seg.get("words", []) if "start" in w and "end" in w] for seg in aligned]
-    lines = [words for words in lines if words]
+    lines = []
+    for seg in aligned:
+        words = [w for w in seg.get("words", []) if "start" in w and "end" in w]
+        # the aligner cuts lines at their punctuation: "(¿dime por qué?)"
+        # alone belongs to the line before it
+        if words and lines and words[0].get("word", "").startswith("("):
+            lines[-1].extend(words)
+        elif words:
+            lines.append(words)
     for n, words in enumerate(lines):
+        backing = next((k for k, w in enumerate(words) if k and w.get("word", "").startswith("(")), None)
+        group = words[backing:] if backing else []
+        words = words[:backing] if backing else words
         first, last = words[0], words[-1]
         if len(words) > 1 and last["end"] - last["start"] < SQUEEZED_SECONDS:
             sung = squeezed_word(audio, words[-2]["start"], last["end"], words[-2].get("word", ""))
@@ -661,8 +746,15 @@ def trim_line_edges(aligned, levels, audio=None):
                 for w in words[:-1]:
                     w["end"] = min(w["end"], sung[0])
                     w["start"] = min(w["start"], w["end"] - 0.05)
+        next_start = lines[n + 1][0]["start"] if n + 1 < len(lines) else last["end"] + 5.0
+        runs = voiced_runs(audio, last["start"], max(last["end"], (group[-1]["end"] if group else 0)) + 0.1)
+        if group:
+            place_backing(last, group, runs, next_start)
+        elif runs:
+            sung = phrase_end([r for r in runs if r[1] > last["start"] + 0.1], VOICE_GONE_SECONDS)
+            if sung is not None and sung < last["end"]:
+                last["end"] = round(max(last["start"] + 0.1, sung + 0.01), 3)
         if n + 1 < len(lines):
-            next_start = lines[n + 1][0]["start"]
             if last["end"] > next_start - 0.02:
                 last["end"] = round(max(last["start"] + 0.05, next_start - 0.02), 3)
     return aligned

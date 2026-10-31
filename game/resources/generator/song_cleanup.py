@@ -583,6 +583,21 @@ def drop_stray_notes(notes, levels, gap, beat_seconds):
     return out
 
 
+def mark_backing_vocals(notes):
+    """Backing vocals, written in parentheses in the lyrics ("(no lo es)"),
+    as freestyle notes: shown in italics and not scored, as nobody is to
+    sing them. Returns the notes."""
+    inside = False
+    for note in notes:
+        if "(" in note.text:
+            inside = True
+        if inside:
+            note.kind = "F"
+        if ")" in note.text:
+            inside = False
+    return notes
+
+
 def without_late_holds(word, beat_seconds):
     """The last word of a line, stretched by the aligner over what follows
     the voice, keeps notes of reverb or of instruments left in the vocals
@@ -1032,7 +1047,7 @@ def clean_up(body, bpm, gap_ms=0, onsets=None, lyric_lines=None, voiced=None, pi
             line[-1] = without_late_holds(line[-1], beat_seconds)
     for i, line in enumerate(lines):
         notes_of_line = [n for word in line for n in word]
-        out.extend(n.line() for n in join_vowel_syllables(notes_of_line, beat_seconds, split))
+        out.extend(n.line() for n in mark_backing_vocals(join_vowel_syllables(notes_of_line, beat_seconds, split)))
         if i < len(lines) - 1:
             last = line[-1][-1]
             following = lines[i + 1][0][0]
