@@ -78,6 +78,10 @@ def parse_notes(body):
     return notes
 
 
+FOLD_AROUND = 6  # notes on each side that tell the singer's usual pitch
+FOLD_USUAL = 7   # semitones: a note this close to it is not an octave off
+
+
 def fold_octaves(notes):
     """Moves back a lone note an octave away from the notes on both sides.
 
@@ -86,7 +90,9 @@ def fold_octaves(notes):
     a fourth or a fifth on the wrong side, so only a note that jumps far
     from both neighbours the same way, the pitch tracker slipping, is
     moved. Notes jumping up and down by an octave are hard to read and
-    keep the parts of a syllable from being merged.
+    keep the parts of a syllable from being merged. A note in the singer's
+    usual range (the notes around it) stays: its neighbours are the ones
+    off ("orgu-llo a un" and "do" tracked an octave low, "la~~" right).
     """
     original = [n.pitch for n in notes]
     for i, note in enumerate(notes):
@@ -94,6 +100,9 @@ def fold_octaves(notes):
         if not around:
             continue
         diffs = [original[i] - p for p in around]
+        wider = sorted(original[max(0, i - FOLD_AROUND):i] + original[i + 1:i + 1 + FOLD_AROUND])
+        if abs(original[i] - wider[len(wider) // 2]) < FOLD_USUAL:
+            continue
         if all(d >= 9 for d in diffs) or all(d <= -9 for d in diffs):
             note.pitch = original[i] - 12 * round(sum(diffs) / len(diffs) / 12.0)
 
@@ -776,7 +785,7 @@ def letters_of(text):
     return [c for c in text.lower() if c.isalnum()]
 
 
-LETTER_SLACK_SECONDS = 0.15  # a letter heard this far outside its syllable's room is moved in
+LETTER_SLACK_SECONDS = 0.3  # a letter heard this far outside its syllable's room is moved in
 
 
 def place_syllables_by_letters(notes, letters, gap, beat_seconds):
