@@ -20,7 +20,7 @@ The improved stability and code quality of USDX enabled ports to Linux and macOS
 
 #### Song generator
 Makes a song with lyrics and notes from an audio file, a video or a YouTube link, inside the game (Tools » Editor » Generate). It needs UltraSinger, which is installed separately: see [Setting up the song generator](#setting-up-the-song-generator).
-- **Lyrics:** taken from LRCLIB, then lrcmux, or from your own `letra.txt`, and placed where they are sung. If none are found, it uses what Whisper hears.
+- **Lyrics:** taken from LRCLIB, then lrcmux, or from your own `lyrics.txt`, and placed where they are sung. If none are found, it uses what Whisper hears.
 - **Notes:** each note gets the pitch sung during it, and Spanish words are split into syllables by their spelling.
 - **Backing vocals:** they become freestyle notes, with their own line when they close a line.
 - **Golden notes:** placed as in SingStar, about three a minute, spread evenly.

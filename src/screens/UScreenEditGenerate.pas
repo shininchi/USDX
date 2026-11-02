@@ -26,7 +26,7 @@ unit UScreenEditGenerate;
  * Editor » Generate: lyrics and notes made automatically (USongGenerator),
  * either for a song that has audio but no lyrics yet, or for a new song from
  * an audio/video file or a YouTube link. The generator leaves the lyrics it
- * heard in letra.txt; once corrected, generating again uses them. The generation goes on in the
+ * heard in lyrics.txt; once corrected, generating again uses them. The generation goes on in the
  * background when leaving the screen. A generated song opens in the editor
  * for the details, and the editor comes back here.
  *}

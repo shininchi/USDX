@@ -87,7 +87,7 @@ def say(line):
     print(line, flush=True)
 
 
-LYRICS_FILES = ("letra.txt", "lyrics.txt")
+LYRICS_FILES = ("lyrics.txt", "letra.txt")  # the first is the one written
 LRCLIB = "https://lrclib.net/api/"
 LRCMUX = "https://api.lrcmux.dev/"
 LRCLIB_AGENT = "USDX song generator (https://github.com/shininchi/USDX)"
@@ -238,7 +238,7 @@ def lyrics_in(folder):
     return None
 
 
-MISSING_LINE_SECONDS = 1.2  # voice without lyrics this long is marked in letra.txt
+MISSING_LINE_SECONDS = 1.2  # voice without lyrics this long is marked in lyrics.txt
 
 
 def voiced_spans(vocals_wav, start, end):
@@ -254,7 +254,7 @@ def voiced_spans(vocals_wav, start, end):
 
 
 def write_heard_lyrics(song_txt, vocals=None):
-    """Saves the lyrics of the song as letra.txt, to be corrected by hand
+    """Saves the lyrics of the song as lyrics.txt, to be corrected by hand
     and used in the next generation, unless the folder already has one.
 
     Where the voice sings but the transcription heard nothing (Whisper skips
@@ -546,7 +546,7 @@ def lyrics_origin(source, lyrics):
         synced = any(re.match(r"\[\d+:\d", l) for l in read_text(lyrics).splitlines())
         return "letra de %s, %s" % (LYRICS_FROM, "sincronizada" if synced else "sin tiempos")
     if source == "user":
-        return "letra de letra.txt"
+        return "letra de %s" % os.path.basename(lyrics)
     return "letra oída por Whisper"
 
 
