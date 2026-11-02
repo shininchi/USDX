@@ -5,6 +5,7 @@ on:
     branches:
       - master
   pull_request:
+  workflow_dispatch:
   # Run every day at 5:40.
   schedule:
     - cron:  '40 5 * * *'
@@ -33,9 +34,11 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-tools
       - name: Install Dependencies
+        # a cut download leaves an installer that waits forever
+        timeout-minutes: 20
         run: |
-          curl.exe -L --max-time 60 -o fpc-installer.exe "https://sourceforge.net/projects/freepascal/files/Win32/3.2.2/fpc-3.2.2.win32.and.win64.exe/download"
-          curl.exe -L --max-time 60 -o nsis-3.05-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.05/nsis-3.05-setup.exe/download"
+          curl.exe -L --fail --retry 5 --retry-all-errors --max-time 300 -o fpc-installer.exe "https://sourceforge.net/projects/freepascal/files/Win32/3.2.2/fpc-3.2.2.win32.and.win64.exe/download"
+          curl.exe -L --fail --retry 5 --retry-all-errors --max-time 300 -o nsis-3.05-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.05/nsis-3.05-setup.exe/download"
           Start-Process -FilePath ".\\fpc-installer.exe" -ArgumentList "/TYPE=full /VERYSILENT /SP- /SUPPRESSMSGBOXES /NORESTART" -Wait
           ./nsis-3.05-setup.exe /S
       - name: Download prebuilt DLLs
