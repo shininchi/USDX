@@ -31,7 +31,7 @@ Makes a song with lyrics and notes from an audio file, a video or a YouTube link
 Guests scan a QR code and browse the songs on their phones.
 - **Requests:** covers, search, filters, previews and a request queue, where repeated requests count as votes. The page can be added to the phone's home screen.
 - **Admin page:** protected by a PIN, to manage the queue, users and microphones, with limits against abuse and an activity log.
-- **In the game:** `I` shows the QR code, `N` and `Shift+N` jump to the requests, and `P` opens the requests list.
+- **In the game:** `I` shows the QR code, `N` jumps to the next request, `Shift+N` to a random one, and `P` opens the playlists, which include the requests.
 - **Jukebox:** a Requests list plays the queue, for a while without singing. In the other lists, requests wait to be sung later.
 
 To turn it on, set `Enabled=On` in the `[SongRequests]` section of `config.ini`. The admin PIN is created the first time. For HTTPS, see [the Caddy example](dists/song-requests/Caddyfile.example).
