@@ -122,6 +122,18 @@
  Delete "$INSTDIR\libopencv_imgproc4130.dll"
  Delete "$INSTDIR\libopencv_videoio4130.dll"
  Delete "$INSTDIR\libsharpyuv-0.dll"
+ Delete "$INSTDIR\libwebp.dll"
+ Delete "$INSTDIR\libtiff.dll"
+ Delete "$INSTDIR\libjpeg-62.dll"
+ Delete "$INSTDIR\libfreetype.dll"
+ Delete "$INSTDIR\libsharpyuv.dll"
+ Delete "$INSTDIR\projectM-4.dll"
+ Delete "$INSTDIR\avcodec-63.dll"
+ Delete "$INSTDIR\avformat-63.dll"
+ Delete "$INSTDIR\avutil-61.dll"
+ Delete "$INSTDIR\swresample-7.dll"
+ Delete "$INSTDIR\swscale-10.dll"
+ Delete "$INSTDIR\lua55.dll"
 
  StrCpy $0 "$INSTDIR\songs"
  Call un.DeleteIfEmpty 

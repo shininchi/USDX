@@ -39,6 +39,7 @@
   </supports>
   <releases>
     <release version="2.0.0" date="2026-11-2" />
+    <release version="2026.10.0" date="2026-10-17" />
     <release version="2026.9.0" date="2026-9-13" />
     <release version="2026.8.1" date="2026-8-19" />
     <release version="2026.8.0" date="2026-8-11" />

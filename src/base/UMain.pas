@@ -669,7 +669,7 @@ begin
 
             // if print is pressed -> make screenshot and save to screenshot path
             if (SimKey = SDLK_SYSREQ) or (SimKey = SDLK_PRINTSCREEN) then
-              Display.SaveScreenShot
+              Display.HandleSDLScreenshotKey(SimKey, Event.key.keysym._mod)
             // toggle the QR code of the song request web client
             else if (Event.type_ = SDL_KEYDOWN) and
                     SongRequestsHandleKey(SimKey, Event.key._repeat <> 0) then
